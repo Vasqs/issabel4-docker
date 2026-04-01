@@ -1,0 +1,92 @@
+#!/bin/bash
+set -euo pipefail
+
+MARKER="${ISABEL_BOOTSTRAP_MARKER:-/var/lib/issabel/.bootstrapped}"
+WEB_ADMIN_USER="${ISSABEL_WEB_ADMIN_USER:-admin}"
+WEB_ADMIN_PASSWORD="${ISSABEL_WEB_ADMIN_PASSWORD:-DevAdmin123}"
+
+sql_escape() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
+wait_for_mariadb() {
+  local retries=60
+  local delay=2
+
+  until mysqladmin ping >/dev/null 2>&1; do
+    retries=$((retries - 1))
+    if [ "$retries" -le 0 ]; then
+      echo "mariadb did not become ready in time" >&2
+      return 1
+    fi
+    sleep "$delay"
+  done
+}
+
+seed_databases() {
+  mysql <<'SQL'
+CREATE DATABASE IF NOT EXISTS asteriskcdrdb;
+CREATE DATABASE IF NOT EXISTS mya2billing;
+GRANT ALL PRIVILEGES ON asterisk.* TO 'asteriskuser'@'localhost' IDENTIFIED BY 'amp109';
+GRANT ALL PRIVILEGES ON asteriskcdrdb.* TO 'asteriskuser'@'localhost' IDENTIFIED BY 'amp109';
+FLUSH PRIVILEGES;
+SQL
+}
+
+reconcile_web_admin() {
+  local acl_db="/var/www/db/acl.db"
+  local web_admin_user_sql
+  local web_admin_password_md5
+
+  if [ ! -f "$acl_db" ]; then
+    echo "acl database not found at $acl_db" >&2
+    return 1
+  fi
+
+  web_admin_user_sql="$(sql_escape "$WEB_ADMIN_USER")"
+  web_admin_password_md5="$(printf '%s' "$WEB_ADMIN_PASSWORD" | md5sum | awk '{print $1}')"
+
+  sqlite3 "$acl_db" <<SQL
+INSERT INTO acl_user (name, description, md5_password, extension)
+SELECT '${web_admin_user_sql}', 'Docker provisioned administrator', '${web_admin_password_md5}', ''
+WHERE NOT EXISTS (
+  SELECT 1 FROM acl_user WHERE name = '${web_admin_user_sql}'
+);
+UPDATE acl_user
+SET md5_password = '${web_admin_password_md5}'
+WHERE name = '${web_admin_user_sql}';
+INSERT INTO acl_membership (id_user, id_group)
+SELECT u.id, g.id
+FROM acl_user u
+JOIN acl_group g ON g.name = 'administrator'
+WHERE u.name = '${web_admin_user_sql}'
+AND NOT EXISTS (
+  SELECT 1
+  FROM acl_membership m
+  WHERE m.id_user = u.id AND m.id_group = g.id
+);
+SQL
+}
+
+apply_issabel_repairs() {
+  if command -v amportal >/dev/null 2>&1; then
+    amportal chown || true
+  fi
+
+  /usr/local/bin/sync-workspace --once || true
+}
+
+main() {
+  reconcile_web_admin
+
+  if [ -f "$MARKER" ]; then
+    exit 0
+  fi
+
+  wait_for_mariadb
+  seed_databases
+  apply_issabel_repairs
+  touch "$MARKER"
+}
+
+main "$@"

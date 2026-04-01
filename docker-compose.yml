@@ -1,0 +1,52 @@
+services:
+  issabel:
+    container_name: issabel-dev
+    hostname: issabel.local
+    privileged: true
+    restart: unless-stopped
+    cgroup: host
+    stop_signal: SIGTERM
+    build:
+      context: .
+      dockerfile: docker/issabel/Dockerfile
+    environment:
+      ISABEL_BOOTSTRAP_MARKER: /var/lib/issabel/.bootstrapped
+      WORKSPACE_ROOT: /workspace
+      ISSABEL_WEB_ADMIN_USER: ${ISSABEL_WEB_ADMIN_USER:-admin}
+      ISSABEL_WEB_ADMIN_PASSWORD: ${ISSABEL_WEB_ADMIN_PASSWORD:-DevAdmin123}
+    command: ["/usr/sbin/init"]
+    tmpfs:
+      - /run
+      - /run/lock
+      - /tmp
+    ports:
+      - "8088:80"
+      - "8443:443"
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: /sys/fs/cgroup
+        target: /sys/fs/cgroup
+        read_only: true
+      - issabel-etc:/etc/asterisk
+      - issabel-var-lib:/var/lib/asterisk
+      - issabel-var-log:/var/log/asterisk
+      - issabel-mysql:/var/lib/mysql
+      - issabel-spool:/var/spool/asterisk
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "curl -fsS http://127.0.0.1/ >/dev/null && mysqladmin --socket=/var/lib/mysql/mysql.sock ping >/dev/null 2>&1 && asterisk -rx 'core show version' >/dev/null 2>&1"
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+
+volumes:
+  issabel-etc:
+  issabel-var-lib:
+  issabel-var-log:
+  issabel-mysql:
+  issabel-spool:

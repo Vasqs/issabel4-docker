@@ -1,0 +1,8 @@
+.git
+.build/*
+!.build/issabel-root
+!.build/issabel-root/**
+issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso
+__pycache__/
+tests/__pycache__/
+.env

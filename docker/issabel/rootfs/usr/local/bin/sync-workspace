@@ -1,0 +1,21 @@
+#!/bin/bash
+set -euo pipefail
+
+WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
+
+sync_tree() {
+  local source="$1"
+  local target="$2"
+
+  if [ -d "$source" ]; then
+    mkdir -p "$target"
+    rsync -a --delete "$source"/ "$target"/
+  fi
+}
+
+main() {
+  sync_tree "${WORKSPACE_ROOT}/modules" "/var/www/html/modules"
+  sync_tree "${WORKSPACE_ROOT}/integrations" "/opt/issabel-integrations"
+}
+
+main "$@"

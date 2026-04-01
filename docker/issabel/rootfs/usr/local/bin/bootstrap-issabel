@@ -1,0 +1,132 @@
+#!/bin/bash
+set -euo pipefail
+
+MARKER="${ISABEL_BOOTSTRAP_MARKER:-/var/lib/issabel/.bootstrapped}"
+MARIADB_PID=""
+HTTPD_PID=""
+ASTERISK_PID=""
+
+prepare_filesystem() {
+  mkdir -p "$(dirname "$MARKER")" \
+    /workspace \
+    /run/mariadb \
+    /run/httpd \
+    /run/asterisk \
+    /var/lib/mysql \
+    /var/lib/issabel \
+    /var/log/asterisk \
+    /var/spool/asterisk \
+    /var/spool/mail
+
+  touch /etc/asterisk/res_odbc_additional.conf /etc/asterisk/res_odbc_custom.conf || true
+  chown -R mysql:mysql /var/lib/mysql /run/mariadb || true
+  chown -R asterisk:asterisk /etc/asterisk /var/lib/asterisk /var/log/asterisk /var/spool/asterisk /run/asterisk || true
+}
+
+prepare_database() {
+  if [ ! -d /var/lib/mysql/mysql ]; then
+    mysql_install_db --user=mysql --datadir=/var/lib/mysql >/var/log/issabel-mysql-install.log 2>&1
+  fi
+}
+
+wait_for_mysql() {
+  local retries=60
+  local delay=2
+
+  until mysqladmin --socket=/var/lib/mysql/mysql.sock ping >/dev/null 2>&1; do
+    retries=$((retries - 1))
+    if [ "$retries" -le 0 ]; then
+      echo "mariadb did not become ready in time" >&2
+      return 1
+    fi
+    sleep "$delay"
+  done
+}
+
+wait_for_httpd() {
+  local retries=30
+
+  until curl -fsS http://127.0.0.1/ >/dev/null 2>&1; do
+    retries=$((retries - 1))
+    if [ "$retries" -le 0 ]; then
+      echo "httpd did not become ready in time" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+wait_for_asterisk() {
+  local retries=30
+
+  until asterisk -rx "core show version" >/dev/null 2>&1; do
+    retries=$((retries - 1))
+    if [ "$retries" -le 0 ]; then
+      echo "asterisk did not become ready in time" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+start_mariadb() {
+  mysqld_safe --datadir=/var/lib/mysql --socket=/var/lib/mysql/mysql.sock >/var/log/issabel-mysqld-safe.log 2>&1 &
+  MARIADB_PID=$!
+  wait_for_mysql
+}
+
+start_httpd() {
+  /usr/sbin/httpd -DFOREGROUND >/var/log/issabel-httpd.log 2>&1 &
+  HTTPD_PID=$!
+  wait_for_httpd
+}
+
+start_asterisk() {
+  asterisk -U asterisk -G asterisk -fvvvg >/var/log/issabel-asterisk.log 2>&1 &
+  ASTERISK_PID=$!
+  wait_for_asterisk
+}
+
+monitor_services() {
+  while true; do
+    if ! kill -0 "$MARIADB_PID" 2>/dev/null; then
+      echo "mariadb process exited" >&2
+      return 1
+    fi
+    if ! kill -0 "$HTTPD_PID" 2>/dev/null; then
+      echo "httpd process exited" >&2
+      return 1
+    fi
+    if ! kill -0 "$ASTERISK_PID" 2>/dev/null; then
+      echo "asterisk process exited" >&2
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+stop_services() {
+  for pid in "$ASTERISK_PID" "$HTTPD_PID" "$MARIADB_PID"; do
+    if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
+      kill "${pid}" 2>/dev/null || true
+    fi
+  done
+  wait || true
+}
+
+main() {
+  trap stop_services EXIT INT TERM
+
+  prepare_filesystem
+  prepare_database
+
+  # systemctl enable mariadb httpd asterisk sshd issabel-firstboot
+  start_mariadb
+  /usr/local/bin/issabel-firstboot || true
+  start_httpd
+  start_asterisk
+
+  monitor_services
+}
+
+main "$@"

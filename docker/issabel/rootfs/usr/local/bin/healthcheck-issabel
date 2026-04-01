@@ -1,0 +1,6 @@
+#!/bin/bash
+set -euo pipefail
+
+curl -fsS http://127.0.0.1/ >/dev/null
+mysqladmin --socket=/var/lib/mysql/mysql.sock ping >/dev/null 2>&1
+asterisk -rx "core show version" >/dev/null 2>&1
