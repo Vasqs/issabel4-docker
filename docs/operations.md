@@ -6,9 +6,27 @@ This runbook describes how the local Issabel development stack is built, started
 
 ## Build flow
 
-1. [`scripts/prepare-iso-root.sh`](/home/vasqs/Projetos/Issabel/scripts/prepare-iso-root.sh) extracts the local ISO content needed for package installation into `.build/issabel-root`.
-2. [`docker/issabel/Dockerfile`](/home/vasqs/Projetos/Issabel/docker/issabel/Dockerfile) builds a CentOS 7 based image and installs Issabel packages from `file:///opt/issabel-root`.
-3. [`docker-compose.yml`](/home/vasqs/Projetos/Issabel/docker-compose.yml) runs the resulting image as `issabel-dev`.
+1. [`scripts/resolve-install-profile.py`](/home/vasqs/Projetos/Issabel/scripts/resolve-install-profile.py) resolves the guided installation profile.
+2. [`scripts/prepare-iso-root.sh`](/home/vasqs/Projetos/Issabel/scripts/prepare-iso-root.sh) extracts the selected ISO content into `.build/issabel-root`.
+3. [`docker/issabel/Dockerfile`](/home/vasqs/Projetos/Issabel/docker/issabel/Dockerfile) builds a CentOS 7 based image and installs Issabel packages from `file:///opt/issabel-root`.
+4. [`docker-compose.yml`](/home/vasqs/Projetos/Issabel/docker-compose.yml) runs the resulting image as `issabel-dev` unless overridden by `.env`.
+
+## Guided installation flow
+
+The installer wizard is a build-time flow.
+
+1. detect available ISO files in the project root
+2. choose the ISO if more than one is present
+3. extract the selected ISO
+4. detect available `asteriskXX` packages from the extracted repository
+5. choose the Asterisk package first
+6. choose the optional module profile and per-module adjustments second
+7. persist the result in `.issabel-install.conf`
+8. generate `.build/install.env` for the build scripts
+
+Compatibility rule:
+
+- `issabel-callcenter` is shown only when the selected Asterisk package is `asterisk11`
 
 ## Startup flow
 
@@ -43,13 +61,30 @@ Defined in [.env](/home/vasqs/Projetos/Issabel/.env) and referenced by [`docker-
 
 - `ISSABEL_WEB_ADMIN_USER`
 - `ISSABEL_WEB_ADMIN_PASSWORD`
+- `COMPOSE_PROJECT_NAME`
+- `ISSABEL_CONTAINER_NAME`
+- `ISSABEL_HOSTNAME`
+- `ISSABEL_HTTP_PORT`
+- `ISSABEL_HTTPS_PORT`
+- `WORKSPACE_BIND_SOURCE`
 
 Current defaults in [.env.example](/home/vasqs/Projetos/Issabel/.env.example):
 
 ```env
+COMPOSE_PROJECT_NAME=issabel
+ISSABEL_CONTAINER_NAME=issabel-dev
+ISSABEL_HOSTNAME=issabel.local
+ISSABEL_HTTP_PORT=8088
+ISSABEL_HTTPS_PORT=8443
+WORKSPACE_BIND_SOURCE=.
 ISSABEL_WEB_ADMIN_USER=admin
 ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123
 ```
+
+Build-time selections are stored outside `.env`:
+
+- `.issabel-install.conf`
+- `.build/install.env`
 
 ## Endpoints
 
