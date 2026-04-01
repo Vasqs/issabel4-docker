@@ -1,5 +1,6 @@
 .build/
 .env
+.issabel-install.conf
 __pycache__/
 tests/__pycache__/
 issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso

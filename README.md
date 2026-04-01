@@ -10,6 +10,7 @@ This project packages Issabel 4 for local development with Docker, using the loc
 - mounted workspace at `/workspace`
 - controlled sync of development assets into the Issabel runtime
 - reproducible web admin credentials from `.env`
+- guided build-time selection of Asterisk and optional RPM modules
 
 ## Repository layout
 
@@ -17,6 +18,7 @@ This project packages Issabel 4 for local development with Docker, using the loc
 - [`docker/issabel/Dockerfile`](/home/vasqs/Projetos/Issabel/docker/issabel/Dockerfile): local image build
 - [`docker/issabel/rootfs/usr/local/bin/bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/bootstrap-issabel): runtime process supervisor
 - [`docker/issabel/rootfs/usr/local/bin/issabel-firstboot`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/issabel-firstboot): first-boot and credential reconciliation
+- [`scripts/resolve-install-profile.py`](/home/vasqs/Projetos/Issabel/scripts/resolve-install-profile.py): guided installer for ISO, Asterisk package and optional modules
 - [`scripts/up.sh`](/home/vasqs/Projetos/Issabel/scripts/up.sh): build and start stack
 - [`scripts/build-image.sh`](/home/vasqs/Projetos/Issabel/scripts/build-image.sh): build image only
 - [`scripts/down.sh`](/home/vasqs/Projetos/Issabel/scripts/down.sh): stop stack
@@ -35,17 +37,36 @@ This project packages Issabel 4 for local development with Docker, using the loc
 
 1. Copy `.env.example` if you want a fresh env file:
    `cp .env.example .env`
-2. Review the Issabel web admin credentials in [.env](/home/vasqs/Projetos/Issabel/.env).
-3. Start the stack:
+2. Copy `.issabel-install.conf.example` if you want to preseed the build profile:
+   `cp .issabel-install.conf.example .issabel-install.conf`
+3. Review the runtime values in [.env](/home/vasqs/Projetos/Issabel/.env).
+4. Start the stack:
    `./scripts/up.sh`
-4. Open:
+5. In interactive terminals the installer will ask for the Asterisk version first and only then show compatible optional modules.
+6. Open:
    `http://127.0.0.1:8088`
    `https://127.0.0.1:8443`
+
+## Guided installation profile
+
+Build-time choices are kept out of `.env`.
+
+- `.issabel-install.conf` stores the selected ISO, Asterisk package and optional module keys
+- `.build/install.env` is generated from that profile and sourced by the build scripts
+- the wizard detects available `asteriskXX` packages directly from the ISO contents
+- `callcenter` is shown only when the selected Asterisk package is `asterisk11`
+- non-interactive executions reuse the saved profile instead of prompting
 
 ## Credentials
 
 Current defaults are defined in [.env](/home/vasqs/Projetos/Issabel/.env):
 
+- `COMPOSE_PROJECT_NAME=issabel`
+- `ISSABEL_CONTAINER_NAME=issabel-dev`
+- `ISSABEL_HOSTNAME=issabel.local`
+- `ISSABEL_HTTP_PORT=8088`
+- `ISSABEL_HTTPS_PORT=8443`
+- `WORKSPACE_BIND_SOURCE=.`
 - `ISSABEL_WEB_ADMIN_USER=admin`
 - `ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123`
 
@@ -88,6 +109,7 @@ This was chosen because it is more reliable in Docker for this Issabel 4 base th
 
 - build only: `./scripts/build-image.sh`
 - start or rebuild: `./scripts/up.sh`
+- resolve or refresh the saved install profile: `python3 ./scripts/resolve-install-profile.py`
 - stop: `./scripts/down.sh`
 - inspect current state: `./scripts/diagnose.sh`
 - sync local code into runtime: `./scripts/sync-workspace.sh`

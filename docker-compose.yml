@@ -1,7 +1,7 @@
 services:
   issabel:
-    container_name: issabel-dev
-    hostname: issabel.local
+    container_name: ${ISSABEL_CONTAINER_NAME:-issabel-dev}
+    hostname: ${ISSABEL_HOSTNAME:-issabel.local}
     privileged: true
     restart: unless-stopped
     cgroup: host
@@ -9,6 +9,9 @@ services:
     build:
       context: .
       dockerfile: docker/issabel/Dockerfile
+      args:
+        ASTERISK_PACKAGE: ${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}
+        OPTIONAL_PACKAGES: ${ISSABEL_INSTALL_OPTIONAL_PACKAGES:-}
     environment:
       ISABEL_BOOTSTRAP_MARKER: /var/lib/issabel/.bootstrapped
       WORKSPACE_ROOT: /workspace
@@ -20,11 +23,11 @@ services:
       - /run/lock
       - /tmp
     ports:
-      - "8088:80"
-      - "8443:443"
+      - "${ISSABEL_HTTP_PORT:-8088}:80"
+      - "${ISSABEL_HTTPS_PORT:-8443}:443"
     volumes:
       - type: bind
-        source: .
+        source: ${WORKSPACE_BIND_SOURCE:-.}
         target: /workspace
       - type: bind
         source: /sys/fs/cgroup

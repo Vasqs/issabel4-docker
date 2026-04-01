@@ -1,5 +1,8 @@
 FROM quay.io/centos/centos:7
 
+ARG ASTERISK_PACKAGE=asterisk18
+ARG OPTIONAL_PACKAGES=""
+
 ENV container=docker \
     LANG=en_US.UTF-8 \
     LC_ALL=en_US.UTF-8 \
@@ -20,26 +23,12 @@ RUN set -eux; \
       > /etc/yum.repos.d/issabel-local.repo
 
 RUN set -eux; \
+    install_packages="systemd systemd-sysv initscripts sudo which rsync curl net-tools procps-ng openssh-server mariadb-server httpd php php-cli php-mysql php-process issabel issabel-pbx ${ASTERISK_PACKAGE}"; \
+    if [ -n "${OPTIONAL_PACKAGES}" ]; then \
+      install_packages="${install_packages} ${OPTIONAL_PACKAGES}"; \
+    fi; \
     yum --disablerepo='*' --enablerepo=issabel-local -y install \
-      systemd \
-      systemd-sysv \
-      initscripts \
-      sudo \
-      which \
-      rsync \
-      curl \
-      net-tools \
-      procps-ng \
-      openssh-server \
-      mariadb-server \
-      httpd \
-      php \
-      php-cli \
-      php-mysql \
-      php-process \
-      issabel \
-      issabel-pbx \
-      asterisk16; \
+      ${install_packages}; \
     yum clean all; \
     rm -rf /var/cache/yum; \
     mkdir -p /workspace /var/lib/issabel /etc/systemd/system/multi-user.target.wants

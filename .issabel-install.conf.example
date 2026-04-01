@@ -1,0 +1,5 @@
+# Build-time installation profile.
+ISO_NAME=issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso
+ASTERISK_PACKAGE=asterisk18
+MODULE_PROFILE=standard
+OPTIONAL_MODULE_KEYS=reports,endpointconfig
