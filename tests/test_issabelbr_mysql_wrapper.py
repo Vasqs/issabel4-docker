@@ -53,6 +53,33 @@ class IssabelBrMysqlWrapperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.captured_args, ["-uroot", "-psecret", "-e", "select 1"])
 
+    def test_injects_root_password_when_not_supplied(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_mysql = tmp_path / "mysql-real"
+            capture = tmp_path / "capture.txt"
+            fake_mysql.write_text(
+                "#!/bin/bash\n"
+                "printf '%s\\n' \"$@\" > \"$WRAPPER_CAPTURE_PATH\"\n"
+            )
+            fake_mysql.chmod(0o755)
+
+            env = os.environ.copy()
+            env["ISSABELBR_REAL_MYSQL"] = str(fake_mysql)
+            env["ISSABELBR_MYSQL_ROOT_PASSWORD"] = "legacy-root"
+            env["WRAPPER_CAPTURE_PATH"] = str(capture)
+
+            result = subprocess.run(
+                [str(WRAPPER_PATH), "-uroot", "-e", "select 1"],
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0)
+            self.assertEqual(capture.read_text().splitlines(), ["-plegacy-root", "-uroot", "-e", "select 1"])
+
 
 if __name__ == "__main__":
     unittest.main()

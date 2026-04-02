@@ -188,6 +188,12 @@ Then compare the hash with the password in `.env`.
 
 Remember that the web framework auth uses SQLite in `/var/www/db/acl.db`, not MariaDB. MariaDB is used for PBX-related data such as `asteriskcdrdb`.
 
+### Backup generation fails on `endpoint/ep_config_files`
+
+If `backupengine` stops on `endpoint/ep_config_files` with a `tftpboot.tgz` tarball error, confirm that `/tftpboot` exists inside the container. The runtime bootstrap now creates that directory during startup because the legacy backup path expects it to be present.
+
+The same backup path also expects the legacy credentials file at `/etc/issabel.conf` to contain `mysqlrootpwd`. This repository keeps that file synchronized during first boot so backup and restore can authenticate against MariaDB consistently.
+
 ### Workspace changes are not reflected
 
 Run:

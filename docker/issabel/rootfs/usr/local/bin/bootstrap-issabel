@@ -12,6 +12,7 @@ prepare_filesystem() {
     /run/mariadb \
     /run/httpd \
     /run/asterisk \
+    /tftpboot \
     /var/lib/mysql \
     /var/lib/issabel \
     /var/log/asterisk \

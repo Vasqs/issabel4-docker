@@ -8,15 +8,47 @@ PBX_DB_USER="${ISSABEL_PBX_DB_USER:-asteriskuser}"
 PBX_DB_PASSWORD="${ISSABEL_PBX_DB_PASSWORD:-amp109}"
 CALLCENTER_DB_USER="${ISSABEL_CALLCENTER_DB_USER:-asterisk}"
 CALLCENTER_DB_PASSWORD="${ISSABEL_CALLCENTER_DB_PASSWORD:-asterisk}"
+MYSQL_ROOT_PASSWORD="${ISSABEL_MYSQL_ROOT_PASSWORD:-iSsAbEl.2o17}"
 ASTERISK_PACKAGE="${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}"
 INSTALL_ISSABELBR_POST_PATCH="${ISSABEL_INSTALL_ISSABELBR_POST_PATCH:-1}"
 ISSABELBR_POST_PATCH_URL="https://raw.githubusercontent.com/ibinetwork/IssabelBR/refs/heads/master/patch-issabelbr.sh"
 ISSABELBR_POST_PATCH_LOG="/var/log/issabelbr-post-install.log"
 ISSABELBR_MYSQL_WRAPPER="/usr/local/bin/issabelbr-mysql-wrapper"
 EL7_REPO_CONFIGURATOR="/usr/local/bin/configure-el7-repositories"
+MYSQL_SOCKET="${ISSABEL_MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}"
+LEGACY_CREDENTIALS_FILE="${ISSABEL_LEGACY_CREDENTIALS_FILE:-/etc/issabel.conf}"
 
 sql_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
+}
+
+mysql_root() {
+  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --socket="$MYSQL_SOCKET" -uroot "$@"
+}
+
+mysql_root_without_password() {
+  mysql --protocol=socket --socket="$MYSQL_SOCKET" -uroot "$@"
+}
+
+ensure_mysql_root_password() {
+  local escaped_password
+
+  if mysql_root -N -B -e "SELECT 1" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! mysql_root_without_password -N -B -e "SELECT 1" >/dev/null 2>&1; then
+    echo "unable to authenticate as MySQL root with or without password" >&2
+    return 1
+  fi
+
+  escaped_password="$(sql_escape "$MYSQL_ROOT_PASSWORD")"
+  mysql_root_without_password <<SQL
+SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${escaped_password}');
+FLUSH PRIVILEGES;
+SQL
+
+  mysql_root -N -B -e "SELECT 1" >/dev/null 2>&1
 }
 
 wait_for_mariadb() {
@@ -34,7 +66,7 @@ wait_for_mariadb() {
 }
 
 seed_databases() {
-  mysql <<SQL
+  mysql_root <<SQL
 CREATE DATABASE IF NOT EXISTS asterisk;
 CREATE DATABASE IF NOT EXISTS asteriskcdrdb;
 CREATE DATABASE IF NOT EXISTS mya2billing;
@@ -51,7 +83,7 @@ seed_pbx_schema() {
   local pbx_dump="/usr/share/issabelpbx/tmp/issabelpbx-database-dump.sql"
   local devices_table
 
-  devices_table="$(mysql -N -B -e "USE asterisk; SHOW TABLES LIKE 'devices';" 2>/dev/null || true)"
+  devices_table="$(mysql_root -N -B -e "USE asterisk; SHOW TABLES LIKE 'devices';" 2>/dev/null || true)"
   if [ "$devices_table" = "devices" ]; then
     return 0
   fi
@@ -61,7 +93,38 @@ seed_pbx_schema() {
     return 1
   fi
 
-  mysql -uroot asterisk <"$pbx_dump"
+  mysql_root asterisk <"$pbx_dump"
+}
+
+read_config_value() {
+  local file_path="$1"
+  local key="$2"
+
+  [ -f "$file_path" ] || return 1
+  grep -E "^${key}=" "$file_path" | tail -n 1 | cut -d"=" -f2-
+}
+
+read_php_conf_value() {
+  local file_path="$1"
+  local key="$2"
+
+  [ -f "$file_path" ] || return 1
+  grep -E "^\\\$amp_conf\\['${key}'\\]" "$file_path" | tail -n 1 | sed -E "s/^.*=[[:space:]]*'([^']*)';/\\1/"
+}
+
+upsert_config_value() {
+  local file_path="$1"
+  local key="$2"
+  local value="$3"
+  local escaped_value
+
+  touch "$file_path"
+  escaped_value="$(printf '%s' "$value" | sed 's/[\/&]/\\&/g')"
+  if grep -qE "^${key}=" "$file_path"; then
+    sed -i "s/^${key}=.*/${key}=${escaped_value}/" "$file_path"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$file_path"
+  fi
 }
 
 ensure_config_value() {
@@ -104,6 +167,22 @@ reconcile_database_configs() {
   ensure_php_conf_value "/etc/issabelpbx.conf" "AMPDBNAME" "asterisk"
   ensure_config_value "/opt/issabel/dialer/dialerd.conf" "dbuser" "$CALLCENTER_DB_USER"
   ensure_config_value "/opt/issabel/dialer/dialerd.conf" "dbpass" "$CALLCENTER_DB_PASSWORD"
+}
+
+reconcile_legacy_credentials() {
+  local ami_admin_password
+
+  ami_admin_password="$(read_config_value "/etc/amportal.conf" "AMPMGRPASS" || true)"
+  if [ -z "$ami_admin_password" ]; then
+    ami_admin_password="$(read_php_conf_value "/etc/issabelpbx.conf" "AMPMGRPASS" || true)"
+  fi
+  if [ -z "$ami_admin_password" ]; then
+    ami_admin_password="amp111"
+  fi
+
+  upsert_config_value "$LEGACY_CREDENTIALS_FILE" "mysqlrootpwd" "$MYSQL_ROOT_PASSWORD"
+  upsert_config_value "$LEGACY_CREDENTIALS_FILE" "amiadminpwd" "$ami_admin_password"
+  chmod 600 "$LEGACY_CREDENTIALS_FILE" || true
 }
 
 reconcile_web_admin() {
@@ -192,15 +271,18 @@ apply_issabelbr_post_patch() {
   wget -O "$script_path" "$ISSABELBR_POST_PATCH_URL"
   chmod +x "$script_path"
   PATH="$patch_wrapper_dir:$PATH" ISSABELBR_REAL_MYSQL="/usr/bin/mysql" \
+    ISSABELBR_MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
     bash "$script_path" 2>&1 | tee "$ISSABELBR_POST_PATCH_LOG"
 }
 
 main() {
   reconcile_web_admin
   wait_for_mariadb
+  ensure_mysql_root_password
   seed_databases
   seed_pbx_schema
   reconcile_database_configs
+  reconcile_legacy_credentials
 
   if [ -f "$MARKER" ]; then
     exit 0
