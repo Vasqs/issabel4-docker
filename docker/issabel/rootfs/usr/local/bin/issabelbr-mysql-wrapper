@@ -1,0 +1,30 @@
+#!/bin/bash
+set -euo pipefail
+
+REAL_MYSQL="${ISSABELBR_REAL_MYSQL:-/usr/bin/mysql}"
+SANITIZED_ARGS=()
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -p)
+      if [ "${2-__MISSING__}" = "__MISSING__" ]; then
+        SANITIZED_ARGS+=("$1")
+      elif [ -n "${2}" ]; then
+        SANITIZED_ARGS+=("$1" "$2")
+        shift
+      else
+        shift
+      fi
+      ;;
+    -p"")
+      ;;
+    --password=)
+      ;;
+    *)
+      SANITIZED_ARGS+=("$1")
+      ;;
+  esac
+  shift
+done
+
+exec "$REAL_MYSQL" "${SANITIZED_ARGS[@]}"

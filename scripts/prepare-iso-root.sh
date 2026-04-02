@@ -13,6 +13,9 @@ fi
 
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
-bsdtar -xf "$ISO_PATH" -C "$BUILD_DIR" repodata Issabel RPM-GPG-KEY-Issabel RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-EPEL-7
+bsdtar -xf "$ISO_PATH" -C "$BUILD_DIR" \
+  repodata repodata/* \
+  Issabel Issabel/* \
+  RPM-GPG-KEY-Issabel RPM-GPG-KEY-CentOS-7 RPM-GPG-KEY-EPEL-7
 printf '%s\n' "$ISO_NAME" > "${BUILD_DIR}/.source-iso"
 echo "Prepared local Issabel repository at ${BUILD_DIR}"
