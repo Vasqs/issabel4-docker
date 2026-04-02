@@ -278,6 +278,13 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("ensure_php_conf_value \"/etc/issabelpbx.conf\" \"AMPDBNAME\" \"asterisk\"", firstboot_text)
         self.assertNotIn("/usr/local/bin/sync-workspace --once", firstboot_text)
 
+    def test_firstboot_post_patch_cleanup_disarms_return_trap(self) -> None:
+        firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
+        firstboot_text = firstboot_script.read_text()
+
+        self.assertIn("trap cleanup EXIT", firstboot_text)
+        self.assertNotIn("trap cleanup RETURN", firstboot_text)
+
     def test_gitignore_and_docs_cover_local_module_contract(self) -> None:
         gitignore_text = (ROOT / ".gitignore").read_text()
         self.assertIn("modules/", gitignore_text)
