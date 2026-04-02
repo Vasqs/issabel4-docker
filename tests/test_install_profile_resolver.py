@@ -111,6 +111,49 @@ class InstallProfileResolverTests(unittest.TestCase):
         self.assertIn("INSTALL_ISSABELBR_POST_PATCH=1", profile_text)
         self.assertIn("export ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1", env_text)
 
+    def test_write_install_artifacts_updates_compose_env_for_direct_docker_compose(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile_path = root / ".issabel-install.conf"
+            env_path = root / ".build" / "install.env"
+            compose_env_path = root / ".env"
+            compose_env_path.write_text(
+                "COMPOSE_PROJECT_NAME=issabel\n"
+                "ISSABEL_CONTAINER_NAME=issabel-dev\n"
+                "ISSABEL_WEB_ADMIN_USER=admin\n"
+            )
+            selection = self.module.InstallSelection(
+                iso_name="issabel.iso",
+                asterisk=self.module.AsteriskPackage(
+                    package_name="asterisk11",
+                    major="11",
+                    rpm_path=root / "Issabel" / "asterisk11.rpm",
+                ),
+                module_profile="full",
+                module_keys=["agenda", "callcenter", "endpointconfig", "extras", "reports"],
+                optional_packages=[
+                    "issabel-agenda",
+                    "issabel-callcenter",
+                    "issabel-endpointconfig2",
+                    "issabel-extras",
+                    "issabel-reports",
+                ],
+                install_issabelbr_post_patch=True,
+            )
+
+            self.module.write_install_artifacts(profile_path=profile_path, env_path=env_path, selection=selection)
+
+            compose_text = compose_env_path.read_text()
+
+        self.assertIn("ISSABEL_INSTALL_ASTERISK_PACKAGE=asterisk11", compose_text)
+        self.assertIn(
+            "ISSABEL_INSTALL_OPTIONAL_PACKAGES='issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-reports'",
+            compose_text,
+        )
+        self.assertIn("ISSABEL_INSTALL_ISO_NAME=issabel.iso", compose_text)
+        self.assertIn("ISSABEL_INSTALL_MODULE_PROFILE=full", compose_text)
+        self.assertIn("ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1", compose_text)
+
     def test_issabelbr_post_patch_is_disabled_for_unsupported_asterisk_versions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo_root = Path(tmp)

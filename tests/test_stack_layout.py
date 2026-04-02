@@ -31,8 +31,11 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertEqual(service["container_name"], "issabel-dev")
         self.assertEqual(service["restart"], "unless-stopped")
         self.assertEqual(service["build"]["dockerfile"], "docker/issabel/Dockerfile")
-        self.assertEqual(service["build"]["args"]["ASTERISK_PACKAGE"], "asterisk18")
-        self.assertEqual(service["build"]["args"]["OPTIONAL_PACKAGES"], "")
+        self.assertEqual(service["build"]["args"]["ASTERISK_PACKAGE"], "asterisk11")
+        self.assertEqual(
+            service["build"]["args"]["OPTIONAL_PACKAGES"],
+            "issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-reports",
+        )
         self.assertEqual(service["environment"]["ISABEL_BOOTSTRAP_MARKER"], "/var/lib/issabel/.bootstrapped")
         self.assertEqual(service["environment"]["WORKSPACE_ROOT"], "/workspace")
         self.assertEqual(service["environment"]["ISSABEL_WEB_ADMIN_USER"], "admin")
@@ -158,6 +161,13 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("ISSABEL_CONTAINER_NAME=issabel-dev", env_text)
         self.assertIn("ISSABEL_HOSTNAME=issabel.local", env_text)
         self.assertIn("WORKSPACE_BIND_SOURCE=.", env_text)
+        self.assertIn("ISSABEL_INSTALL_ASTERISK_PACKAGE=asterisk11", env_text)
+        self.assertIn(
+            "ISSABEL_INSTALL_OPTIONAL_PACKAGES='issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-reports'",
+            env_text,
+        )
+        self.assertIn("ISSABEL_INSTALL_MODULE_PROFILE=full", env_text)
+        self.assertIn("ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1", env_text)
         self.assertIn("ISSABEL_WEB_ADMIN_USER=admin", env_example_text)
         self.assertIn("ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123", env_example_text)
         self.assertIn("ISSABEL_HTTP_PORT=8088", env_example_text)
