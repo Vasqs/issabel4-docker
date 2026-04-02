@@ -29,6 +29,7 @@ The installer wizard is a build-time flow.
 7. choose whether to apply the IssabelBR post-install patch on first boot
 8. persist the result in `.issabel-install.conf`
 9. generate `.build/install.env` for the build scripts
+10. refresh `.env` so direct `docker compose` runs use the same wizard selection
 
 Compatibility rule:
 
@@ -107,10 +108,11 @@ ISSABEL_WEB_ADMIN_USER=admin
 ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123
 ```
 
-Build-time selections are stored outside `.env`:
+Build-time selections are stored in the wizard artifacts:
 
 - `.issabel-install.conf`
 - `.build/install.env`
+- `.env` is regenerated from those artifacts for Compose compatibility
 
 ## Endpoints
 

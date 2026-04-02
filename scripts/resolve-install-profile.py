@@ -311,6 +311,23 @@ def write_install_artifacts(
     env_lines = [f"export {key}={quote_value(value)}" for key, value in env_values.items()]
     env_path.write_text("\n".join(env_lines) + "\n")
 
+    compose_env_path = env_path.parent.parent / ".env"
+    compose_env_values = read_key_values(compose_env_path)
+    if not compose_env_values:
+        compose_env_values = read_key_values(profile_path.parent.parent / ".env.example")
+
+    compose_env_values.update(
+        {
+            "ISSABEL_INSTALL_ISO_NAME": selection.iso_name,
+            "ISSABEL_INSTALL_ASTERISK_PACKAGE": selection.asterisk.package_name,
+            "ISSABEL_INSTALL_OPTIONAL_PACKAGES": " ".join(selection.optional_packages),
+            "ISSABEL_INSTALL_MODULE_PROFILE": selection.module_profile,
+            "ISSABEL_INSTALL_OPTIONAL_MODULE_KEYS": ",".join(selection.module_keys),
+            "ISSABEL_INSTALL_ISSABELBR_POST_PATCH": "1" if selection.install_issabelbr_post_patch else "0",
+        }
+    )
+    write_key_values(compose_env_path, compose_env_values)
+
 
 def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Resolve and persist the Issabel installation profile.")
