@@ -2,11 +2,14 @@
 set -euo pipefail
 
 REAL_MYSQL="${ISSABELBR_REAL_MYSQL:-/usr/bin/mysql}"
+MYSQL_ROOT_PASSWORD="${ISSABELBR_MYSQL_ROOT_PASSWORD:-}"
 SANITIZED_ARGS=()
+PASSWORD_SUPPLIED=0
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -p)
+      PASSWORD_SUPPLIED=1
       if [ "${2-__MISSING__}" = "__MISSING__" ]; then
         SANITIZED_ARGS+=("$1")
       elif [ -n "${2}" ]; then
@@ -17,8 +20,18 @@ while [ "$#" -gt 0 ]; do
       fi
       ;;
     -p"")
+      PASSWORD_SUPPLIED=1
+      ;;
+    -p*)
+      PASSWORD_SUPPLIED=1
+      SANITIZED_ARGS+=("$1")
       ;;
     --password=)
+      PASSWORD_SUPPLIED=1
+      ;;
+    --password=*)
+      PASSWORD_SUPPLIED=1
+      SANITIZED_ARGS+=("$1")
       ;;
     *)
       SANITIZED_ARGS+=("$1")
@@ -26,5 +39,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift
 done
+
+if [ -n "$MYSQL_ROOT_PASSWORD" ] && [ "$PASSWORD_SUPPLIED" -eq 0 ]; then
+  SANITIZED_ARGS=("-p${MYSQL_ROOT_PASSWORD}" "${SANITIZED_ARGS[@]}")
+fi
 
 exec "$REAL_MYSQL" "${SANITIZED_ARGS[@]}"

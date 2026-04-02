@@ -129,6 +129,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("ISABEL_BOOTSTRAP_MARKER", bootstrap_text)
         self.assertIn("mysql_install_db", bootstrap_text)
         self.assertIn("systemctl enable mariadb httpd", bootstrap_text)
+        self.assertIn("/tftpboot", bootstrap_text)
 
         firstboot_text = firstboot_script.read_text()
         self.assertIn("CREATE DATABASE IF NOT EXISTS asterisk;", firstboot_text)
@@ -142,6 +143,10 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("GRANT ALL PRIVILEGES ON call_center.* TO '${CALLCENTER_DB_USER}'@'localhost' IDENTIFIED BY '${CALLCENTER_DB_PASSWORD}';", firstboot_text)
         self.assertIn("GRANT ALL PRIVILEGES ON asterisk.* TO '${PBX_DB_USER}'@'localhost' IDENTIFIED BY '${PBX_DB_PASSWORD}';", firstboot_text)
         self.assertIn("/etc/issabelpbx.conf", firstboot_text)
+        self.assertIn("/etc/issabel.conf", firstboot_text)
+        self.assertIn("mysqlrootpwd", firstboot_text)
+        self.assertIn("amiadminpwd", firstboot_text)
+        self.assertIn("ISSABEL_MYSQL_ROOT_PASSWORD", firstboot_text)
         self.assertIn("/opt/issabel/dialer/dialerd.conf", firstboot_text)
 
         env_text = env_file.read_text()
@@ -201,7 +206,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         firstboot_text = firstboot_script.read_text()
 
         self.assertIn("seed_pbx_schema", firstboot_text)
-        self.assertIn("mysql -uroot asterisk <\"$pbx_dump\"", firstboot_text)
+        self.assertIn("mysql_root asterisk <\"$pbx_dump\"", firstboot_text)
         self.assertIn("CREATE DATABASE IF NOT EXISTS call_center;", firstboot_text)
         self.assertIn("GRANT ALL PRIVILEGES ON call_center.* TO '${CALLCENTER_DB_USER}'@'localhost' IDENTIFIED BY '${CALLCENTER_DB_PASSWORD}';", firstboot_text)
         self.assertIn("ensure_config_value \"/opt/issabel/dialer/dialerd.conf\" \"dbuser\" \"$CALLCENTER_DB_USER\"", firstboot_text)
