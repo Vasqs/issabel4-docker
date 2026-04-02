@@ -224,8 +224,6 @@ apply_issabel_repairs() {
   if command -v amportal >/dev/null 2>&1; then
     amportal chown || true
   fi
-
-  /usr/local/bin/sync-workspace --once || true
 }
 
 configure_el7_repositories() {
@@ -244,10 +242,6 @@ issabelbr_post_patch_is_supported() {
 }
 
 apply_issabelbr_post_patch() {
-  local script_path
-  local cleanup
-  local patch_wrapper_dir
-
   case "${INSTALL_ISSABELBR_POST_PATCH,,}" in
     1|true|yes|y|on) ;;
     *)
@@ -260,19 +254,25 @@ apply_issabelbr_post_patch() {
     return 0
   fi
 
-  script_path="$(mktemp /tmp/issabelbr-post-patch.XXXXXX.sh)"
-  patch_wrapper_dir="$(mktemp -d /tmp/issabelbr-post-patch-bin.XXXXXX)"
-  cleanup() {
-    rm -f "$script_path"
-    rm -rf "$patch_wrapper_dir"
-  }
-  trap cleanup RETURN
-  ln -s "$ISSABELBR_MYSQL_WRAPPER" "$patch_wrapper_dir/mysql"
-  wget -O "$script_path" "$ISSABELBR_POST_PATCH_URL"
-  chmod +x "$script_path"
-  PATH="$patch_wrapper_dir:$PATH" ISSABELBR_REAL_MYSQL="/usr/bin/mysql" \
-    ISSABELBR_MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
-    bash "$script_path" 2>&1 | tee "$ISSABELBR_POST_PATCH_LOG"
+  (
+    local script_path
+    local cleanup
+    local patch_wrapper_dir
+
+    script_path="$(mktemp /tmp/issabelbr-post-patch.XXXXXX.sh)"
+    patch_wrapper_dir="$(mktemp -d /tmp/issabelbr-post-patch-bin.XXXXXX)"
+    cleanup() {
+      rm -f "$script_path"
+      rm -rf "$patch_wrapper_dir"
+    }
+    trap cleanup EXIT
+    ln -s "$ISSABELBR_MYSQL_WRAPPER" "$patch_wrapper_dir/mysql"
+    wget -O "$script_path" "$ISSABELBR_POST_PATCH_URL"
+    chmod +x "$script_path"
+    PATH="$patch_wrapper_dir:$PATH" ISSABELBR_REAL_MYSQL="/usr/bin/mysql" \
+      ISSABELBR_MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+      bash "$script_path" 2>&1 | tee "$ISSABELBR_POST_PATCH_LOG"
+  )
 }
 
 main() {
