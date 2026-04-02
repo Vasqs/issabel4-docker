@@ -17,6 +17,8 @@ PROFILE_PRESETS = {
     "standard": ["reports", "endpointconfig"],
     "full": ["reports", "endpointconfig", "extras", "fax", "agenda", "callcenter"],
 }
+DEFAULT_INSTALL_ISSABELBR_POST_PATCH = True
+ISSABELBR_POST_PATCH_SUPPORTED_MAJORS = {"11", "13"}
 
 
 @dataclass(frozen=True)
@@ -41,6 +43,7 @@ class InstallSelection:
     module_profile: str
     module_keys: list[str]
     optional_packages: list[str]
+    install_issabelbr_post_patch: bool
 
 
 MODULE_OPTIONS = [
@@ -137,12 +140,17 @@ def available_module_options(build_root: Path, asterisk_major: str) -> dict[str,
     return available
 
 
+def issabelbr_post_patch_is_supported(asterisk_major: str) -> bool:
+    return asterisk_major in ISSABELBR_POST_PATCH_SUPPORTED_MAJORS
+
+
 def resolve_default_selection(
     repo_root: Path,
     preferred_asterisk_package: str | None,
     preferred_module_keys: list[str] | None,
     preferred_module_profile: str = "standard",
     iso_name: str = "",
+    install_issabelbr_post_patch: bool = DEFAULT_INSTALL_ISSABELBR_POST_PATCH,
 ) -> InstallSelection:
     packages = discover_asterisk_packages(repo_root)
     if not packages:
@@ -156,6 +164,9 @@ def resolve_default_selection(
     requested_keys = preferred_module_keys if preferred_module_keys is not None else default_keys
     selected_keys = [key for key in requested_keys if key in available_modules]
     selected_packages = [available_modules[key].package_name for key in selected_keys]
+    install_issabelbr_post_patch = (
+        install_issabelbr_post_patch and issabelbr_post_patch_is_supported(selected_asterisk.major)
+    )
 
     return InstallSelection(
         iso_name=iso_name,
@@ -163,6 +174,7 @@ def resolve_default_selection(
         module_profile=preferred_module_profile if preferred_module_profile in PROFILE_PRESETS else "standard",
         module_keys=selected_keys,
         optional_packages=selected_packages,
+        install_issabelbr_post_patch=install_issabelbr_post_patch,
     )
 
 
@@ -171,6 +183,18 @@ def parse_module_keys(raw_value: str) -> list[str]:
         return []
     normalized = raw_value.replace(" ", ",")
     return [item for item in (part.strip() for part in normalized.split(",")) if item]
+
+
+def parse_bool(raw_value: str | None, default: bool) -> bool:
+    if raw_value is None:
+        return default
+
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default
 
 
 def choose_index(prompt: str, items: list[str], default_index: int) -> int:
@@ -241,12 +265,22 @@ def resolve_interactive_selection(
     else:
         print("\nNo optional curated modules were detected for this Asterisk version.")
 
+    install_issabelbr_post_patch = False
+    if issabelbr_post_patch_is_supported(selected_asterisk.major):
+        install_issabelbr_post_patch = choose_yes_no(
+            "\nApply IssabelBR post-install patch on first boot?",
+            initial_selection.install_issabelbr_post_patch,
+        )
+    else:
+        print("\nIssabelBR post-install patch is only available for Asterisk 11 and 13.")
+
     return InstallSelection(
         iso_name=iso_name,
         asterisk=selected_asterisk,
         module_profile=selected_profile,
         module_keys=selected_keys,
         optional_packages=[available_modules[key].package_name for key in selected_keys],
+        install_issabelbr_post_patch=install_issabelbr_post_patch,
     )
 
 
@@ -260,6 +294,7 @@ def write_install_artifacts(
         "ASTERISK_PACKAGE": selection.asterisk.package_name,
         "MODULE_PROFILE": selection.module_profile,
         "OPTIONAL_MODULE_KEYS": ",".join(selection.module_keys),
+        "INSTALL_ISSABELBR_POST_PATCH": "1" if selection.install_issabelbr_post_patch else "0",
     }
     write_key_values(profile_path, profile_values)
 
@@ -269,6 +304,7 @@ def write_install_artifacts(
         "ISSABEL_INSTALL_OPTIONAL_PACKAGES": " ".join(selection.optional_packages),
         "ISSABEL_INSTALL_MODULE_PROFILE": selection.module_profile,
         "ISSABEL_INSTALL_OPTIONAL_MODULE_KEYS": ",".join(selection.module_keys),
+        "ISSABEL_INSTALL_ISSABELBR_POST_PATCH": "1" if selection.install_issabelbr_post_patch else "0",
     }
     profile_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,6 +358,11 @@ def run(argv: list[str] | None = None) -> int:
         preferred_module_keys=stored_module_keys,
         preferred_module_profile=stored_profile.get("MODULE_PROFILE", "standard"),
         iso_name=selected_iso,
+        install_issabelbr_post_patch=parse_bool(
+            os.environ.get("ISSABEL_INSTALL_ISSABELBR_POST_PATCH")
+            or stored_profile.get("INSTALL_ISSABELBR_POST_PATCH"),
+            DEFAULT_INSTALL_ISSABELBR_POST_PATCH,
+        ),
     )
 
     final_selection = (

@@ -52,9 +52,12 @@ This project packages Issabel 4 for local development with Docker, using the loc
 Build-time choices are kept out of `.env`.
 
 - `.issabel-install.conf` stores the selected ISO, Asterisk package and optional module keys
+- `.issabel-install.conf` also stores whether the IssabelBR post-install patch should run on first boot
 - `.build/install.env` is generated from that profile and sourced by the build scripts
 - the wizard detects available `asteriskXX` packages directly from the ISO contents
 - `callcenter` is shown only when the selected Asterisk package is `asterisk11`
+- the IssabelBR post-install patch prompt defaults to enabled for new profiles
+- the runtime always rewrites `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror without performing a full OS migration or upgrade
 - non-interactive executions reuse the saved profile instead of prompting
 
 ## Credentials

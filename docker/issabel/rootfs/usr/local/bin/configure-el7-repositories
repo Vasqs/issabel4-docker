@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+
+REPO_ROOT="${ISSABEL_REPO_ROOT:-/}"
+YUM_REPO_DIR="${REPO_ROOT%/}/etc/yum.repos.d"
+CENTOS_BASE_REPO="${YUM_REPO_DIR}/CentOS-Base.repo"
+ALMALINUX_EL7_CENTOS_REPO_URL="${ALMALINUX_EL7_CENTOS_REPO_URL:-https://el7.repo.almalinux.org/centos/CentOS-Base.repo}"
+
+mkdir -p "$YUM_REPO_DIR"
+curl -fsSL "$ALMALINUX_EL7_CENTOS_REPO_URL" -o "$CENTOS_BASE_REPO"
+echo "Configured EL7 base repository from ${ALMALINUX_EL7_CENTOS_REPO_URL}"

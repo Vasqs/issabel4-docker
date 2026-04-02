@@ -11,6 +11,11 @@ This runbook describes how the local Issabel development stack is built, started
 3. [`docker/issabel/Dockerfile`](/home/vasqs/Projetos/Issabel/docker/issabel/Dockerfile) builds a CentOS 7 based image and installs Issabel packages from `file:///opt/issabel-root`.
 4. [`docker-compose.yml`](/home/vasqs/Projetos/Issabel/docker-compose.yml) runs the resulting image as `issabel-dev` unless overridden by `.env`.
 
+Repository note:
+
+- the runtime rewrites `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror `https://el7.repo.almalinux.org/centos/CentOS-Base.repo`
+- this is a repository-source migration only; it does not run a full AlmaLinux OS conversion and does not force a system upgrade
+
 ## Guided installation flow
 
 The installer wizard is a build-time flow.
@@ -21,8 +26,9 @@ The installer wizard is a build-time flow.
 4. detect available `asteriskXX` packages from the extracted repository
 5. choose the Asterisk package first
 6. choose the optional module profile and per-module adjustments second
-7. persist the result in `.issabel-install.conf`
-8. generate `.build/install.env` for the build scripts
+7. choose whether to apply the IssabelBR post-install patch on first boot
+8. persist the result in `.issabel-install.conf`
+9. generate `.build/install.env` for the build scripts
 
 Compatibility rule:
 
@@ -51,6 +57,8 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 - assigning that user to the `administrator` group if missing
 - running `amportal chown` when available
 - syncing `/workspace/modules` and `/workspace/integrations`
+- rewriting `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror before any optional post-install logic
+- downloading and executing the IssabelBR post-install patch when `ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1`
 - marking first boot complete through `/var/lib/issabel/.bootstrapped`
 
 The web admin reconciliation runs before the marker check, so changing `.env` and recreating the container rotates the Issabel web password without deleting volumes.

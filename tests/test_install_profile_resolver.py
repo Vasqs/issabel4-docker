@@ -85,6 +85,60 @@ class InstallProfileResolverTests(unittest.TestCase):
         self.assertEqual(selected.asterisk.package_name, "asterisk18")
         self.assertEqual(selected.optional_packages, ["issabel-reports"])
 
+    def test_write_install_artifacts_persists_issabelbr_post_install_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            profile_path = root / ".issabel-install.conf"
+            env_path = root / ".build" / "install.env"
+            selection = self.module.InstallSelection(
+                iso_name="issabel.iso",
+                asterisk=self.module.AsteriskPackage(
+                    package_name="asterisk18",
+                    major="18",
+                    rpm_path=root / "Issabel" / "asterisk18.rpm",
+                ),
+                module_profile="standard",
+                module_keys=["reports"],
+                optional_packages=["issabel-reports"],
+                install_issabelbr_post_patch=True,
+            )
+
+            self.module.write_install_artifacts(profile_path=profile_path, env_path=env_path, selection=selection)
+
+            profile_text = profile_path.read_text()
+            env_text = env_path.read_text()
+
+        self.assertIn("INSTALL_ISSABELBR_POST_PATCH=1", profile_text)
+        self.assertIn("export ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1", env_text)
+
+    def test_issabelbr_post_patch_is_disabled_for_unsupported_asterisk_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            repo_dir = repo_root / "Issabel"
+            repo_dir.mkdir(parents=True)
+            for name in [
+                "asterisk11-11.25.3-6.el7.x86_64.rpm",
+                "asterisk13-13.38.3-1.el7.x86_64.rpm",
+                "asterisk18-18.6.0-2.el7.x86_64.rpm",
+            ]:
+                (repo_dir / name).write_text("")
+
+            unsupported = self.module.resolve_default_selection(
+                repo_root=repo_root,
+                preferred_asterisk_package="asterisk18",
+                preferred_module_keys=[],
+                install_issabelbr_post_patch=True,
+            )
+            supported = self.module.resolve_default_selection(
+                repo_root=repo_root,
+                preferred_asterisk_package="asterisk13",
+                preferred_module_keys=[],
+                install_issabelbr_post_patch=True,
+            )
+
+        self.assertFalse(unsupported.install_issabelbr_post_patch)
+        self.assertTrue(supported.install_issabelbr_post_patch)
+
 
 if __name__ == "__main__":
     unittest.main()

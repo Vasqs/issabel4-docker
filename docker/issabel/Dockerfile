@@ -23,7 +23,7 @@ RUN set -eux; \
       > /etc/yum.repos.d/issabel-local.repo
 
 RUN set -eux; \
-    install_packages="systemd systemd-sysv initscripts sudo which rsync curl net-tools procps-ng openssh-server mariadb-server httpd php php-cli php-mysql php-process issabel issabel-pbx ${ASTERISK_PACKAGE}"; \
+    install_packages="systemd systemd-sysv initscripts sudo which rsync curl wget net-tools procps-ng openssh-server mariadb-server httpd php php-cli php-mysql php-process issabel issabel-pbx ${ASTERISK_PACKAGE}"; \
     if [ -n "${OPTIONAL_PACKAGES}" ]; then \
       install_packages="${install_packages} ${OPTIONAL_PACKAGES}"; \
     fi; \
@@ -36,7 +36,7 @@ RUN set -eux; \
 COPY docker/issabel/rootfs/ /
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/bootstrap-issabel /usr/local/bin/issabel-firstboot /usr/local/bin/sync-workspace /usr/local/bin/healthcheck-issabel
+    chmod +x /usr/local/bin/bootstrap-issabel /usr/local/bin/issabel-firstboot /usr/local/bin/sync-workspace /usr/local/bin/healthcheck-issabel /usr/local/bin/issabelbr-mysql-wrapper /usr/local/bin/configure-el7-repositories
 
 VOLUME ["/sys/fs/cgroup"]
 

@@ -8,6 +8,12 @@ PBX_DB_USER="${ISSABEL_PBX_DB_USER:-asteriskuser}"
 PBX_DB_PASSWORD="${ISSABEL_PBX_DB_PASSWORD:-amp109}"
 CALLCENTER_DB_USER="${ISSABEL_CALLCENTER_DB_USER:-asterisk}"
 CALLCENTER_DB_PASSWORD="${ISSABEL_CALLCENTER_DB_PASSWORD:-asterisk}"
+ASTERISK_PACKAGE="${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}"
+INSTALL_ISSABELBR_POST_PATCH="${ISSABEL_INSTALL_ISSABELBR_POST_PATCH:-1}"
+ISSABELBR_POST_PATCH_URL="https://raw.githubusercontent.com/ibinetwork/IssabelBR/refs/heads/master/patch-issabelbr.sh"
+ISSABELBR_POST_PATCH_LOG="/var/log/issabelbr-post-install.log"
+ISSABELBR_MYSQL_WRAPPER="/usr/local/bin/issabelbr-mysql-wrapper"
+EL7_REPO_CONFIGURATOR="/usr/local/bin/configure-el7-repositories"
 
 sql_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
@@ -143,6 +149,52 @@ apply_issabel_repairs() {
   /usr/local/bin/sync-workspace --once || true
 }
 
+configure_el7_repositories() {
+  "$EL7_REPO_CONFIGURATOR"
+}
+
+issabelbr_post_patch_is_supported() {
+  case "$ASTERISK_PACKAGE" in
+    asterisk11|asterisk13)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+apply_issabelbr_post_patch() {
+  local script_path
+  local cleanup
+  local patch_wrapper_dir
+
+  case "${INSTALL_ISSABELBR_POST_PATCH,,}" in
+    1|true|yes|y|on) ;;
+    *)
+      return 0
+      ;;
+  esac
+
+  if ! issabelbr_post_patch_is_supported; then
+    echo "skipping IssabelBR post-install patch for unsupported package ${ASTERISK_PACKAGE}" >&2
+    return 0
+  fi
+
+  script_path="$(mktemp /tmp/issabelbr-post-patch.XXXXXX.sh)"
+  patch_wrapper_dir="$(mktemp -d /tmp/issabelbr-post-patch-bin.XXXXXX)"
+  cleanup() {
+    rm -f "$script_path"
+    rm -rf "$patch_wrapper_dir"
+  }
+  trap cleanup RETURN
+  ln -s "$ISSABELBR_MYSQL_WRAPPER" "$patch_wrapper_dir/mysql"
+  wget -O "$script_path" "$ISSABELBR_POST_PATCH_URL"
+  chmod +x "$script_path"
+  PATH="$patch_wrapper_dir:$PATH" ISSABELBR_REAL_MYSQL="/usr/bin/mysql" \
+    bash "$script_path" 2>&1 | tee "$ISSABELBR_POST_PATCH_LOG"
+}
+
 main() {
   reconcile_web_admin
   wait_for_mariadb
@@ -155,6 +207,8 @@ main() {
   fi
 
   apply_issabel_repairs
+  configure_el7_repositories
+  apply_issabelbr_post_patch
   touch "$MARKER"
 }
 
