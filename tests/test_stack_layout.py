@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,25 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class IssabelStackLayoutTests(unittest.TestCase):
+    def run_sync_workspace(self, workspace_root: Path, web_root: Path, modules_target: Path, state_root: Path) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "WORKSPACE_ROOT": str(workspace_root),
+                "ISSABEL_WEB_ROOT": str(web_root),
+                "ISSABEL_MODULES_TARGET_ROOT": str(modules_target),
+                "ISSABEL_MODULE_STATE_ROOT": str(state_root),
+                "ISSABEL_INTEGRATIONS_TARGET_ROOT": str(workspace_root / "published-integrations"),
+            }
+        )
+        return subprocess.run(
+            [str(ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "sync-workspace")],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+
     def test_compose_declares_expected_runtime_contract(self) -> None:
         compose_path = ROOT / "docker-compose.yml"
         self.assertTrue(compose_path.exists(), "docker-compose.yml must exist")
@@ -73,6 +93,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         prepare_script = ROOT / "scripts" / "prepare-iso-root.sh"
         resolve_script = ROOT / "scripts" / "resolve-install-profile.py"
         sync_script = ROOT / "scripts" / "sync-workspace.sh"
+        rootfs_sync_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "sync-workspace"
         diagnose_script = ROOT / "scripts" / "diagnose.sh"
         build_script = ROOT / "scripts" / "build-image.sh"
         up_script = ROOT / "scripts" / "up.sh"
@@ -81,12 +102,17 @@ class IssabelStackLayoutTests(unittest.TestCase):
         install_profile_example = ROOT / ".issabel-install.conf.example"
         env_file = ROOT / ".env"
         env_example_file = ROOT / ".env.example"
+        modules_dir = ROOT / "modules"
+        modules_readme = modules_dir / "README.md"
+        overlays_dir = ROOT / "overlays"
+        overlays_readme = overlays_dir / "README.md"
 
         for path in [
             dockerfile,
             prepare_script,
             resolve_script,
             sync_script,
+            rootfs_sync_script,
             diagnose_script,
             build_script,
             up_script,
@@ -95,6 +121,10 @@ class IssabelStackLayoutTests(unittest.TestCase):
             install_profile_example,
             env_file,
             env_example_file,
+            modules_dir,
+            modules_readme,
+            overlays_dir,
+            overlays_readme,
         ]:
             self.assertTrue(path.exists(), f"{path} must exist")
 
@@ -126,6 +156,18 @@ class IssabelStackLayoutTests(unittest.TestCase):
         sync_text = sync_script.read_text()
         self.assertIn("/workspace", sync_text)
         self.assertIn("/var/www/html/modules", sync_text)
+        self.assertIn("/usr/local/bin/sync-workspace", sync_text)
+
+        rootfs_sync_text = rootfs_sync_script.read_text()
+        self.assertIn("STATE_ROOT", rootfs_sync_text)
+        self.assertIn("apply_module_migrations", rootfs_sync_text)
+        self.assertIn("revert_removed_modules", rootfs_sync_text)
+        self.assertIn("/var/lib/asterisk/issabel-module-state", rootfs_sync_text)
+        self.assertIn("ISSABEL_WEB_ROOT", rootfs_sync_text)
+        self.assertIn("verify_overlay_conflicts", rootfs_sync_text)
+        self.assertIn("apply_overlay", rootfs_sync_text)
+        self.assertIn("restore_overlay", rootfs_sync_text)
+        self.assertIn("OVERLAYS_SOURCE_ROOT", rootfs_sync_text)
         self.assertIn("rsync", sync_text)
 
         bootstrap_text = bootstrap_script.read_text()
@@ -176,6 +218,19 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("ISSABEL_HOSTNAME=issabel.local", env_example_text)
         self.assertIn("WORKSPACE_BIND_SOURCE=.", env_example_text)
 
+        modules_readme_text = modules_readme.read_text()
+        self.assertIn("web/", modules_readme_text)
+        self.assertIn("migrations/apply", modules_readme_text)
+        self.assertIn("migrations/revert", modules_readme_text)
+        self.assertIn("hooks/apply.sh", modules_readme_text)
+        self.assertIn("./scripts/sync-workspace.sh", modules_readme_text)
+        self.assertIn("overlays/", modules_readme_text)
+
+        overlays_readme_text = overlays_readme.read_text()
+        self.assertIn("web_root/", overlays_readme_text)
+        self.assertIn("/var/www/html", overlays_readme_text)
+        self.assertIn("conflicting overlays", overlays_readme_text)
+
     def test_compose_config_respects_runtime_env_overrides(self) -> None:
         compose_path = ROOT / "docker-compose.yml"
         env = os.environ.copy()
@@ -221,6 +276,82 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("GRANT ALL PRIVILEGES ON call_center.* TO '${CALLCENTER_DB_USER}'@'localhost' IDENTIFIED BY '${CALLCENTER_DB_PASSWORD}';", firstboot_text)
         self.assertIn("ensure_config_value \"/opt/issabel/dialer/dialerd.conf\" \"dbuser\" \"$CALLCENTER_DB_USER\"", firstboot_text)
         self.assertIn("ensure_php_conf_value \"/etc/issabelpbx.conf\" \"AMPDBNAME\" \"asterisk\"", firstboot_text)
+        self.assertNotIn("/usr/local/bin/sync-workspace --once", firstboot_text)
+
+    def test_gitignore_and_docs_cover_local_module_contract(self) -> None:
+        gitignore_text = (ROOT / ".gitignore").read_text()
+        self.assertIn("modules/", gitignore_text)
+        self.assertIn("overlays/", gitignore_text)
+
+        operations_text = (ROOT / "docs" / "operations.md").read_text()
+        self.assertIn("module contract", operations_text)
+        self.assertIn("overlays/<overlay>/web_root", operations_text)
+        self.assertIn("migrations/apply/<database>", operations_text)
+        self.assertIn("migrations/revert/<database>", operations_text)
+        self.assertIn("hooks/apply.sh", operations_text)
+        self.assertIn("hooks/revert.sh", operations_text)
+        self.assertIn("URL direta", operations_text)
+
+    def test_sync_workspace_applies_and_reverts_web_root_overlay(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+            module_root = workspace_root / "modules" / "standalone-a"
+            overlay_root = workspace_root / "overlays" / "theme-a" / "web_root"
+            web_payload_root = module_root / "web"
+
+            (workspace_root / "modules").mkdir(parents=True)
+            (workspace_root / "overlays").mkdir(parents=True)
+            web_root.mkdir(parents=True)
+            overlay_root.mkdir(parents=True)
+            web_payload_root.mkdir(parents=True)
+            (web_root / "index.php").write_text("core-index\n")
+            (web_root / "themes").mkdir()
+            (overlay_root / "index.php").write_text("theme-index\n")
+            (overlay_root / "themes" / "custom.css").parent.mkdir(parents=True)
+            (overlay_root / "themes" / "custom.css").write_text("body { color: red; }\n")
+            (web_payload_root / "info.txt").write_text("payload\n")
+
+            first_run = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(first_run.returncode, 0, first_run.stderr)
+            self.assertEqual((web_root / "index.php").read_text(), "theme-index\n")
+            self.assertEqual((web_root / "themes" / "custom.css").read_text(), "body { color: red; }\n")
+            self.assertEqual((modules_target / "standalone-a" / "info.txt").read_text(), "payload\n")
+
+            overlay_state = state_root / "overlays" / "theme-a"
+            self.assertTrue((overlay_state / "runtime" / "web-root-overlay-state.txt").exists())
+            self.assertTrue((overlay_state / "snapshot" / "original-web-root" / "index.php").exists())
+
+            (workspace_root / "overlays" / "theme-a").rename(tmp_root / "theme-a-removed")
+            second_run = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(second_run.returncode, 0, second_run.stderr)
+            self.assertEqual((web_root / "index.php").read_text(), "core-index\n")
+            self.assertFalse((web_root / "themes" / "custom.css").exists())
+            self.assertFalse((state_root / "overlays" / "theme-a").exists())
+
+    def test_sync_workspace_blocks_conflicting_web_root_overlays(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+
+            for overlay_name, content in [("theme-a", "a\n"), ("theme-b", "b\n")]:
+                overlay_root = workspace_root / "overlays" / overlay_name / "web_root"
+                overlay_root.mkdir(parents=True, exist_ok=True)
+                (overlay_root / "index.php").write_text(content)
+
+            web_root.mkdir(parents=True)
+            (web_root / "index.php").write_text("core\n")
+
+            result = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("conflict", result.stderr.lower())
+            self.assertEqual((web_root / "index.php").read_text(), "core\n")
 
 
 if __name__ == "__main__":
