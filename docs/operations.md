@@ -53,6 +53,8 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 - creating `asteriskcdrdb` if needed
 - creating `mya2billing` if needed
 - granting `asteriskuser@localhost` access with password `amp109`
+- converging the MariaDB `root@localhost` password to the legacy Issabel value expected by privileged tooling
+- reconciling `/etc/issabel.conf` with `mysqlrootpwd` and `amiadminpwd` for legacy backup and restore workflows
 - reconciling the Issabel web admin user in `/var/www/db/acl.db`
 - assigning that user to the `administrator` group if missing
 - running `amportal chown` when available
@@ -62,6 +64,22 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 - marking first boot complete through `/var/lib/issabel/.bootstrapped`
 
 The web admin reconciliation runs before the marker check, so changing `.env` and recreating the container rotates the Issabel web password without deleting volumes.
+
+## Backup and restore contract
+
+The bundled Issabel backup engine is legacy-oriented and expects runtime artifacts that are not obvious from the web UI alone.
+
+- `/etc/issabel.conf` must exist and contain `mysqlrootpwd`
+- `/etc/issabel.conf` should also contain `amiadminpwd` for legacy restore helpers
+- MariaDB `root@localhost` must accept the same password stored in `mysqlrootpwd`
+- `/tftpboot` must exist so the `endpoint/ep_config_files` component can be archived as `tftpboot.tgz`
+
+The local runtime bootstrap now guarantees those conditions on container start. This prevents the two fatal backup errors seen during validation:
+
+- `failed to find MySQL root password in /etc/issabel.conf`
+- `endpoint/ep_config_files: failed to create tarball tftpboot.tgz`
+
+Warnings about missing optional databases such as `roundcubedb`, `endpointconfig`, `qstats`, `sugarcrm`, `vtigercrm510`, or `meetme` are non-fatal. They indicate optional legacy components that are not installed in the current stack.
 
 ## Environment variables
 
