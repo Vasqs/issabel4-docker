@@ -11,6 +11,7 @@ This project packages Issabel 4 for local development with Docker, using the loc
 - controlled sync of development assets into the Issabel runtime
 - reproducible web admin credentials from `.env`
 - guided build-time selection of Asterisk and optional RPM modules
+- local module contract with reversible apply and revert on `./scripts/sync-workspace.sh`
 
 ## Repository layout
 
@@ -81,10 +82,25 @@ The bootstrap reconciles this web admin user into `/var/www/db/acl.db` on every 
 
 The full project is mounted at `/workspace` inside the container. The sync helper publishes only the development targets that should affect the Issabel runtime:
 
-- `/workspace/modules` to `/var/www/html/modules`
+- `/workspace/modules` to `/var/www/html/modules/<module>`
 - `/workspace/integrations` to `/opt/issabel-integrations`
 
 This avoids bind-mounting the whole Issabel application tree over `/var/www/html`, which is safer for local stability.
+
+### Local module contract
+
+`modules/` is the safe extension point for custom Issabel changes and is ignored by Git so each user can decide which local modules to keep.
+
+- a directory under `modules/` becomes active when `./scripts/sync-workspace.sh` runs
+- if the module contains `web/`, that directory is published as `/var/www/html/modules/<module>`
+- if the customization lives under `overlays/<overlay>/web_root/`, those files are applied over `/var/www/html` like a reversible theme layer
+- if `web/` is absent, the module root is published as-is, excluding `migrations/` and `hooks/`
+- overlay conflicts on the same target path stop the sync with an explicit error
+- `migrations/apply/<database>/*.sql` run on sync in sorted order
+- `migrations/revert/<database>/*.sql` run automatically when a module is removed and sync runs again
+- optional `hooks/apply.sh` and `hooks/revert.sh` support reversible file or service changes
+
+This keeps standalone modules separate from the stable Issabel base and makes rollback easier when a local customization causes problems. Removing the overlay directory and running sync restores the original Issabel web files that were overlaid.
 
 ## Persistent data
 
@@ -115,7 +131,7 @@ This was chosen because it is more reliable in Docker for this Issabel 4 base th
 - resolve or refresh the saved install profile: `python3 ./scripts/resolve-install-profile.py`
 - stop: `./scripts/down.sh`
 - inspect current state: `./scripts/diagnose.sh`
-- sync local code into runtime: `./scripts/sync-workspace.sh`
+- sync local modules and apply or revert their customizations: `./scripts/sync-workspace.sh`
 
 ## Portainer
 

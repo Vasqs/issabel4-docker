@@ -2,6 +2,26 @@
 set -euo pipefail
 
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-/workspace}"
+MODULES_SOURCE_ROOT="${WORKSPACE_ROOT}/modules"
+OVERLAYS_SOURCE_ROOT="${WORKSPACE_ROOT}/overlays"
+WEB_ROOT_TARGET="${ISSABEL_WEB_ROOT:-/var/www/html}"
+MODULES_TARGET_ROOT="${ISSABEL_MODULES_TARGET_ROOT:-/var/www/html/modules}"
+INTEGRATIONS_SOURCE_ROOT="${WORKSPACE_ROOT}/integrations"
+INTEGRATIONS_TARGET_ROOT="${ISSABEL_INTEGRATIONS_TARGET_ROOT:-/opt/issabel-integrations}"
+STATE_ROOT="${ISSABEL_MODULE_STATE_ROOT:-/var/lib/asterisk/issabel-module-state}"
+STATE_MODULES_ROOT="${STATE_ROOT}/modules"
+STATE_OVERLAYS_ROOT="${STATE_ROOT}/overlays"
+CURRENT_MODULES_FILE="${STATE_ROOT}/current-modules.txt"
+CURRENT_OVERLAYS_FILE="${STATE_ROOT}/current-overlays.txt"
+MYSQL_SOCKET="${ISSABEL_MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}"
+MYSQL_ROOT_PASSWORD="${ISSABEL_MYSQL_ROOT_PASSWORD:-iSsAbEl.2o17}"
+HOOK_LOG_DIR="${STATE_ROOT}/logs"
+
+mkdir -p "$STATE_MODULES_ROOT" "$STATE_OVERLAYS_ROOT" "$HOOK_LOG_DIR" "$MODULES_TARGET_ROOT"
+
+log() {
+  printf '[sync-workspace] %s\n' "$*"
+}
 
 sync_tree() {
   local source="$1"
@@ -13,9 +33,517 @@ sync_tree() {
   fi
 }
 
+mysql_root() {
+  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --socket="$MYSQL_SOCKET" -uroot "$@"
+}
+
+ensure_state_dir() {
+  local module_name="$1"
+  mkdir -p "${STATE_MODULES_ROOT}/${module_name}/snapshot" "${STATE_MODULES_ROOT}/${module_name}/runtime"
+}
+
+list_modules() {
+  if [ ! -d "$MODULES_SOURCE_ROOT" ]; then
+    return 0
+  fi
+
+  find "$MODULES_SOURCE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+}
+
+module_source_root() {
+  local module_name="$1"
+  printf '%s/%s' "$MODULES_SOURCE_ROOT" "$module_name"
+}
+
+module_target_root() {
+  local module_name="$1"
+  printf '%s/%s' "$MODULES_TARGET_ROOT" "$module_name"
+}
+
+module_state_root() {
+  local module_name="$1"
+  printf '%s/%s' "$STATE_MODULES_ROOT" "$module_name"
+}
+
+module_runtime_root() {
+  local module_name="$1"
+  printf '%s/runtime' "$(module_state_root "$module_name")"
+}
+
+module_snapshot_root() {
+  local module_name="$1"
+  printf '%s/snapshot' "$(module_state_root "$module_name")"
+}
+
+module_payload_root() {
+  local module_name="$1"
+  local module_root
+  module_root="$(module_source_root "$module_name")"
+
+  if [ -d "${module_root}/web" ]; then
+    printf '%s/web' "$module_root"
+  else
+    printf '%s' "$module_root"
+  fi
+}
+
+sync_module_payload() {
+  local module_name="$1"
+  local payload_root
+  local target_root
+
+  payload_root="$(module_payload_root "$module_name")"
+  target_root="$(module_target_root "$module_name")"
+  mkdir -p "$target_root"
+
+  if [ "${payload_root}" = "$(module_source_root "$module_name")" ]; then
+    rsync -a --delete \
+      --exclude '/migrations' \
+      --exclude '/hooks' \
+      --exclude '/module.env' \
+      --exclude '/module.env.example' \
+      --exclude '/README.md' \
+      "${payload_root}/" "${target_root}/"
+  else
+    rsync -a --delete "${payload_root}/" "${target_root}/"
+  fi
+}
+
+snapshot_module_contract() {
+  local module_name="$1"
+  local source_root
+  local snapshot_root
+
+  source_root="$(module_source_root "$module_name")"
+  snapshot_root="$(module_snapshot_root "$module_name")"
+  mkdir -p "$snapshot_root"
+  rm -rf "${snapshot_root:?}/"*
+
+  if [ -d "${source_root}/migrations" ]; then
+    mkdir -p "${snapshot_root}/migrations"
+    rsync -a "${source_root}/migrations/" "${snapshot_root}/migrations/"
+  fi
+
+  if [ -d "${source_root}/hooks" ]; then
+    mkdir -p "${snapshot_root}/hooks"
+    rsync -a "${source_root}/hooks/" "${snapshot_root}/hooks/"
+  fi
+}
+
+list_overlays() {
+  if [ ! -d "$OVERLAYS_SOURCE_ROOT" ]; then
+    return 0
+  fi
+
+  find "$OVERLAYS_SOURCE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+}
+
+overlay_source_root() {
+  local overlay_name="$1"
+  printf '%s/%s' "$OVERLAYS_SOURCE_ROOT" "$overlay_name"
+}
+
+overlay_state_root() {
+  local overlay_name="$1"
+  printf '%s/%s' "$STATE_OVERLAYS_ROOT" "$overlay_name"
+}
+
+overlay_runtime_root() {
+  local overlay_name="$1"
+  printf '%s/runtime' "$(overlay_state_root "$overlay_name")"
+}
+
+overlay_snapshot_root() {
+  local overlay_name="$1"
+  printf '%s/snapshot' "$(overlay_state_root "$overlay_name")"
+}
+
+overlay_web_root() {
+  local overlay_name="$1"
+  local overlay_root
+
+  overlay_root="$(overlay_source_root "$overlay_name")"
+  if [ -d "${overlay_root}/web_root" ]; then
+    printf '%s/web_root' "$overlay_root"
+  else
+    printf '%s/web-root' "$overlay_root"
+  fi
+}
+
+ensure_overlay_state_dir() {
+  local overlay_name="$1"
+  mkdir -p "$(overlay_snapshot_root "$overlay_name")" "$(overlay_runtime_root "$overlay_name")"
+}
+
+overlay_state_file() {
+  local overlay_name="$1"
+  printf '%s/web-root-overlay-state.txt' "$(overlay_runtime_root "$overlay_name")"
+}
+
+overlay_original_snapshot_root() {
+  local overlay_name="$1"
+  printf '%s/original-web-root' "$(overlay_snapshot_root "$overlay_name")"
+}
+
+run_sql_file() {
+  local database_name="$1"
+  local sql_file="$2"
+
+  log "applying SQL on ${database_name}: ${sql_file}"
+  mysql_root "$database_name" <"$sql_file"
+}
+
+state_file_path() {
+  local module_name="$1"
+  local state_name="$2"
+  printf '%s/%s' "$(module_runtime_root "$module_name")" "$state_name"
+}
+
+has_state_line() {
+  local state_file="$1"
+  local line="$2"
+  [ -f "$state_file" ] && grep -Fxq "$line" "$state_file"
+}
+
+append_state_line() {
+  local state_file="$1"
+  local line="$2"
+
+  mkdir -p "$(dirname "$state_file")"
+  if ! has_state_line "$state_file" "$line"; then
+    printf '%s\n' "$line" >>"$state_file"
+  fi
+}
+
+remove_state_line() {
+  local state_file="$1"
+  local line="$2"
+  local tmp_file
+
+  [ -f "$state_file" ] || return 0
+  tmp_file="$(mktemp)"
+  grep -Fvx "$line" "$state_file" >"$tmp_file" || true
+  mv "$tmp_file" "$state_file"
+}
+
+run_hook() {
+  local module_name="$1"
+  local hook_file="$2"
+  local hook_phase="$3"
+  local effective_root="$4"
+  local log_file
+
+  [ -f "$hook_file" ] || return 0
+
+  chmod +x "$hook_file"
+  log_file="${HOOK_LOG_DIR}/${module_name}-${hook_phase}.log"
+  log "running ${hook_phase} hook for ${module_name}: ${hook_file}"
+
+  MODULE_NAME="$module_name" \
+  MODULE_ROOT="$effective_root" \
+  MODULE_TARGET_ROOT="$(module_target_root "$module_name")" \
+  MODULE_STATE_ROOT="$(module_state_root "$module_name")" \
+  MODULE_RUNTIME_ROOT="$(module_runtime_root "$module_name")" \
+  MYSQL_SOCKET="$MYSQL_SOCKET" \
+  MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+  bash "$hook_file" >>"$log_file" 2>&1
+}
+
+prune_empty_parent_dirs() {
+  local target_path="$1"
+  local current_dir
+
+  current_dir="$(dirname "$target_path")"
+  while [ "$current_dir" != "$WEB_ROOT_TARGET" ] && [ "$current_dir" != "/" ]; do
+    rmdir "$current_dir" 2>/dev/null || break
+    current_dir="$(dirname "$current_dir")"
+  done
+}
+
+list_overlay_files() {
+  local overlay_name="$1"
+  local overlay_root
+
+  overlay_root="$(overlay_web_root "$overlay_name")"
+  [ -d "$overlay_root" ] || return 0
+  find "$overlay_root" -type f | sort
+}
+
+verify_overlay_conflicts() {
+  declare -A owners=()
+  local overlay_name
+  local overlay_root
+  local overlay_file
+  local relative_path
+
+  while IFS= read -r overlay_name; do
+    [ -n "$overlay_name" ] || continue
+    overlay_root="$(overlay_web_root "$overlay_name")"
+    [ -d "$overlay_root" ] || continue
+
+    while IFS= read -r overlay_file; do
+      [ -n "$overlay_file" ] || continue
+      relative_path="${overlay_file#${overlay_root}/}"
+      if [ -n "${owners[$relative_path]:-}" ]; then
+        printf 'overlay conflict on %s between %s and %s\n' \
+          "$relative_path" "${owners[$relative_path]}" "$overlay_name" >&2
+        return 1
+      fi
+      owners[$relative_path]="$overlay_name"
+    done < <(list_overlay_files "$overlay_name")
+  done < <(list_overlays)
+}
+
+restore_overlay() {
+  local overlay_name="$1"
+  local state_file
+  local snapshot_root
+  local state_kind
+  local relative_path
+  local target_path
+  local snapshot_path
+
+  state_file="$(overlay_state_file "$overlay_name")"
+  snapshot_root="$(overlay_original_snapshot_root "$overlay_name")"
+  [ -f "$state_file" ] || return 0
+
+  while IFS=$'\t' read -r state_kind relative_path; do
+    [ -n "$relative_path" ] || continue
+    target_path="${WEB_ROOT_TARGET}/${relative_path}"
+    snapshot_path="${snapshot_root}/${relative_path}"
+
+    case "$state_kind" in
+      replaced)
+        if [ -f "$snapshot_path" ]; then
+          mkdir -p "$(dirname "$target_path")"
+          cp -a "$snapshot_path" "$target_path"
+        fi
+        ;;
+      created)
+        rm -f "$target_path"
+        prune_empty_parent_dirs "$target_path"
+        ;;
+    esac
+  done < <(tac "$state_file")
+
+  rm -f "$state_file"
+  rm -rf "$snapshot_root"
+}
+
+reset_active_module_overlays() {
+  local overlay_name
+
+  while IFS= read -r overlay_name; do
+    [ -n "$overlay_name" ] || continue
+    restore_overlay "$overlay_name"
+  done < <(list_overlays)
+}
+
+apply_overlay() {
+  local overlay_name="$1"
+  local overlay_root
+  local state_file
+  local snapshot_root
+  local overlay_file
+  local relative_path
+  local target_path
+  local snapshot_path
+
+  overlay_root="$(overlay_web_root "$overlay_name")"
+  [ -d "$overlay_root" ] || return 0
+
+  ensure_overlay_state_dir "$overlay_name"
+  state_file="$(overlay_state_file "$overlay_name")"
+  snapshot_root="$(overlay_original_snapshot_root "$overlay_name")"
+  rm -f "$state_file"
+  rm -rf "$snapshot_root"
+  mkdir -p "$snapshot_root"
+
+  while IFS= read -r overlay_file; do
+    [ -n "$overlay_file" ] || continue
+    relative_path="${overlay_file#${overlay_root}/}"
+    target_path="${WEB_ROOT_TARGET}/${relative_path}"
+    snapshot_path="${snapshot_root}/${relative_path}"
+
+    if [ -f "$target_path" ]; then
+      mkdir -p "$(dirname "$snapshot_path")"
+      cp -a "$target_path" "$snapshot_path"
+      printf 'replaced\t%s\n' "$relative_path" >>"$state_file"
+    else
+      printf 'created\t%s\n' "$relative_path" >>"$state_file"
+    fi
+
+    mkdir -p "$(dirname "$target_path")"
+    cp -a "$overlay_file" "$target_path"
+  done < <(list_overlay_files "$overlay_name")
+}
+
+apply_module_migrations() {
+  local module_name="$1"
+  local apply_root
+  local state_file
+  local database_name
+  local sql_file
+  local migration_key
+
+  apply_root="$(module_source_root "$module_name")/migrations/apply"
+  state_file="$(state_file_path "$module_name" "applied-migrations.txt")"
+  [ -d "$apply_root" ] || return 0
+
+  while IFS= read -r database_name; do
+    while IFS= read -r sql_file; do
+      migration_key="${database_name}/$(basename "$sql_file")"
+      if has_state_line "$state_file" "$migration_key"; then
+        continue
+      fi
+      run_sql_file "$database_name" "$sql_file"
+      append_state_line "$state_file" "$migration_key"
+    done < <(find "${apply_root}/${database_name}" -maxdepth 1 -type f -name '*.sql' | sort)
+  done < <(find "$apply_root" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort)
+}
+
+revert_module_migrations() {
+  local module_name="$1"
+  local revert_root="$2"
+  local state_file
+  local migration_key
+  local database_name
+  local migration_file
+  local sql_file
+
+  state_file="$(state_file_path "$module_name" "applied-migrations.txt")"
+  [ -f "$state_file" ] || return 0
+
+  while IFS= read -r migration_key; do
+    [ -n "$migration_key" ] || continue
+    database_name="${migration_key%%/*}"
+    migration_file="${migration_key#*/}"
+    sql_file="${revert_root}/${database_name}/${migration_file}"
+
+    if [ -f "$sql_file" ]; then
+      run_sql_file "$database_name" "$sql_file"
+    else
+      log "no revert SQL found for ${module_name}: ${migration_key}"
+    fi
+
+    remove_state_line "$state_file" "$migration_key"
+  done < <(tac "$state_file")
+}
+
+revert_removed_modules() {
+  local previous_modules_file
+  local module_name
+  local module_state
+  local snapshot_root
+
+  previous_modules_file="$CURRENT_MODULES_FILE"
+  [ -f "$previous_modules_file" ] || return 0
+
+  while IFS= read -r module_name; do
+    [ -n "$module_name" ] || continue
+    if [ -d "$(module_source_root "$module_name")" ]; then
+      continue
+    fi
+
+    module_state="$(module_state_root "$module_name")"
+    snapshot_root="$(module_snapshot_root "$module_name")"
+
+    if [ -d "$module_state" ]; then
+      run_hook "$module_name" "${snapshot_root}/hooks/revert.sh" "revert" "$snapshot_root"
+      revert_module_migrations "$module_name" "${snapshot_root}/migrations/revert"
+    fi
+
+    rm -rf "$(module_target_root "$module_name")"
+    rm -rf "$module_state"
+    log "reverted removed module ${module_name}"
+  done <"$previous_modules_file"
+}
+
+revert_removed_overlays() {
+  local previous_overlays_file
+  local overlay_name
+  local overlay_state
+
+  previous_overlays_file="$CURRENT_OVERLAYS_FILE"
+  [ -f "$previous_overlays_file" ] || return 0
+
+  while IFS= read -r overlay_name; do
+    [ -n "$overlay_name" ] || continue
+    if [ -d "$(overlay_source_root "$overlay_name")" ]; then
+      continue
+    fi
+
+    overlay_state="$(overlay_state_root "$overlay_name")"
+    if [ -d "$overlay_state" ]; then
+      restore_overlay "$overlay_name"
+    fi
+
+    rm -rf "$overlay_state"
+    log "reverted removed overlay ${overlay_name}"
+  done <"$previous_overlays_file"
+}
+
+apply_module() {
+  local module_name="$1"
+
+  ensure_state_dir "$module_name"
+  sync_module_payload "$module_name"
+  snapshot_module_contract "$module_name"
+  apply_module_migrations "$module_name"
+  run_hook "$module_name" "$(module_source_root "$module_name")/hooks/apply.sh" "apply" "$(module_source_root "$module_name")"
+}
+
+record_current_modules() {
+  local tmp_file
+
+  tmp_file="$(mktemp)"
+  list_modules >"$tmp_file"
+  mkdir -p "$(dirname "$CURRENT_MODULES_FILE")"
+  mv "$tmp_file" "$CURRENT_MODULES_FILE"
+}
+
+record_current_overlays() {
+  local tmp_file
+
+  tmp_file="$(mktemp)"
+  list_overlays >"$tmp_file"
+  mkdir -p "$(dirname "$CURRENT_OVERLAYS_FILE")"
+  mv "$tmp_file" "$CURRENT_OVERLAYS_FILE"
+}
+
+sync_modules() {
+  local module_name
+
+  mkdir -p "$MODULES_TARGET_ROOT"
+  revert_removed_modules
+
+  while IFS= read -r module_name; do
+    [ -n "$module_name" ] || continue
+    apply_module "$module_name"
+  done < <(list_modules)
+
+  record_current_modules
+}
+
+sync_overlays() {
+  local overlay_name
+
+  verify_overlay_conflicts
+  revert_removed_overlays
+  reset_active_module_overlays
+
+  while IFS= read -r overlay_name; do
+    [ -n "$overlay_name" ] || continue
+    apply_overlay "$overlay_name"
+  done < <(list_overlays)
+
+  record_current_overlays
+}
+
 main() {
-  sync_tree "${WORKSPACE_ROOT}/modules" "/var/www/html/modules"
-  sync_tree "${WORKSPACE_ROOT}/integrations" "/opt/issabel-integrations"
+  sync_overlays
+  sync_modules
+  sync_tree "$INTEGRATIONS_SOURCE_ROOT" "$INTEGRATIONS_TARGET_ROOT"
 }
 
 main "$@"

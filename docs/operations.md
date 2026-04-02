@@ -59,7 +59,6 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 - reconciling the Issabel web admin user in `/var/www/db/acl.db`
 - assigning that user to the `administrator` group if missing
 - running `amportal chown` when available
-- syncing `/workspace/modules` and `/workspace/integrations`
 - rewriting `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror before any optional post-install logic
 - downloading and executing the IssabelBR post-install patch when `ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1`
 - marking first boot complete through `/var/lib/issabel/.bootstrapped`
@@ -148,8 +147,43 @@ Recommended loop for module and integration work:
 
 Sync targets:
 
-- local `modules/` to `/var/www/html/modules`
+- local `modules/<module>` to `/var/www/html/modules/<module>`
 - local `integrations/` to `/opt/issabel-integrations`
+
+### Local module contract
+
+The module contract is explicit and sync-driven. A module is active when its directory exists under `modules/` and the user runs `./scripts/sync-workspace.sh`.
+
+Recommended layout:
+
+```text
+modules/<module>/
+  web/
+  migrations/
+    apply/<database>/*.sql
+    revert/<database>/*.sql
+  hooks/apply.sh
+  hooks/revert.sh
+
+overlays/<overlay>/web_root/
+  index.php
+  NewIvr/
+    index.php
+    login.php
+```
+
+Rules enforced by the sync helper:
+
+- `web/` is published to `/var/www/html/modules/<module>`
+- `overlays/<overlay>/web_root` is applied on top of `/var/www/html` and restored automatically when the overlay is removed
+- if `web/` is missing, the module root itself is published as a legacy-compatible payload
+- conflicting overlay targets across active overlays abort the sync before changes are applied
+- `migrations/apply/<database>` are executed in lexicographic order and tracked in `/var/lib/asterisk/issabel-module-state`
+- `migrations/revert/<database>` run in reverse order when a previously active module is removed and sync runs again
+- `hooks/apply.sh` and `hooks/revert.sh` are optional and should be idempotent
+- URL direta is the expected access pattern for custom modules in this stack, for example `http://127.0.0.1:8088/modules/<module>/...`
+
+This is the project module contract for keeping Issabel customizations outside the stable base while preserving a reversible path for database and runtime changes.
 
 ## Verification commands
 
