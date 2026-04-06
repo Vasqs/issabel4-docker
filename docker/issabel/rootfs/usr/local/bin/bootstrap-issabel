@@ -5,6 +5,7 @@ MARKER="${ISABEL_BOOTSTRAP_MARKER:-/var/lib/issabel/.bootstrapped}"
 MARIADB_PID=""
 HTTPD_PID=""
 ASTERISK_PID=""
+CALLCENTER_ENABLED=0
 
 prepare_filesystem() {
   mkdir -p "$(dirname "$MARKER")" \
@@ -88,6 +89,25 @@ start_asterisk() {
   wait_for_asterisk
 }
 
+callcenter_is_installed() {
+  [ -x /etc/rc.d/init.d/issabeldialer ] && [ -x /opt/issabel/dialer/dialerd ]
+}
+
+start_callcenter() {
+  if ! callcenter_is_installed; then
+    return 0
+  fi
+
+  /etc/rc.d/init.d/issabeldialer start >/var/log/issabel-callcenter.log 2>&1
+  if /etc/rc.d/init.d/issabeldialer status >/dev/null 2>&1; then
+    CALLCENTER_ENABLED=1
+    return 0
+  fi
+
+  echo "issabeldialer did not remain running after startup" >&2
+  return 1
+}
+
 monitor_services() {
   while true; do
     if ! kill -0 "$MARIADB_PID" 2>/dev/null; then
@@ -102,11 +122,18 @@ monitor_services() {
       echo "asterisk process exited" >&2
       return 1
     fi
+    if [ "$CALLCENTER_ENABLED" -eq 1 ] && ! /etc/rc.d/init.d/issabeldialer status >/dev/null 2>&1; then
+      echo "issabeldialer process exited" >&2
+      return 1
+    fi
     sleep 2
   done
 }
 
 stop_services() {
+  if [ "$CALLCENTER_ENABLED" -eq 1 ]; then
+    /etc/rc.d/init.d/issabeldialer stop >/dev/null 2>&1 || true
+  fi
   for pid in "$ASTERISK_PID" "$HTTPD_PID" "$MARIADB_PID"; do
     if [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null; then
       kill "${pid}" 2>/dev/null || true
@@ -126,6 +153,7 @@ main() {
   /usr/local/bin/issabel-firstboot || true
   start_httpd
   start_asterisk
+  start_callcenter
 
   monitor_services
 }
