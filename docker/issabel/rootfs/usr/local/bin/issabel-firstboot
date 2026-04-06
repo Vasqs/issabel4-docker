@@ -170,6 +170,25 @@ read_manager_credentials() {
   ' "$file_path"
 }
 
+find_manager_credentials() {
+  local manager_credentials
+  local file_path
+
+  for file_path in \
+    /etc/asterisk/manager.conf \
+    /etc/asterisk/manager_additional.conf \
+    /etc/asterisk/manager_custom.conf
+  do
+    manager_credentials="$(read_manager_credentials "$file_path" || true)"
+    if [ -n "$manager_credentials" ]; then
+      printf '%s\n' "$manager_credentials"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 upsert_config_value() {
   local file_path="$1"
   local key="$2"
@@ -322,6 +341,15 @@ EOF
   fi
 }
 
+normalize_agents_conf() {
+  local file_path="/etc/asterisk/agents.conf"
+
+  [ -f "$file_path" ] || return 0
+  if ! grep -q '^\[agents\]$' "$file_path"; then
+    printf '\n[agents]\n' >>"$file_path"
+  fi
+}
+
 reconcile_database_configs() {
   ensure_config_value "/etc/amportal.conf" "AMPDBUSER" "$PBX_DB_USER"
   ensure_config_value "/etc/amportal.conf" "AMPDBPASS" "$PBX_DB_PASSWORD"
@@ -364,7 +392,7 @@ reconcile_ami_credentials() {
     ami_admin_user="admin"
   fi
 
-  manager_credentials="$(read_manager_credentials "/etc/asterisk/manager.conf" || true)"
+  manager_credentials="$(find_manager_credentials || true)"
   if [ -n "$manager_credentials" ]; then
     IFS=$'\t' read -r ami_admin_user ami_admin_password <<<"$manager_credentials"
   else
@@ -386,6 +414,7 @@ reconcile_ami_credentials() {
 reconcile_legacy_credentials() {
   upsert_config_value "$LEGACY_CREDENTIALS_FILE" "mysqlrootpwd" "$MYSQL_ROOT_PASSWORD"
   reconcile_ami_credentials
+  normalize_agents_conf
   chmod 600 "$LEGACY_CREDENTIALS_FILE" || true
 }
 
