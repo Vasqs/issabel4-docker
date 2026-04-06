@@ -7,6 +7,18 @@ HTTPD_PID=""
 ASTERISK_PID=""
 CALLCENTER_ENABLED=0
 
+reuse_running_service() {
+  local process_name="$1"
+  local pid=""
+
+  pid="$(pgrep -xo "$process_name" 2>/dev/null || true)"
+  if [ -z "$pid" ]; then
+    return 1
+  fi
+
+  printf '%s\n' "$pid"
+}
+
 prepare_filesystem() {
   mkdir -p "$(dirname "$MARKER")" \
     /workspace \
@@ -78,12 +90,22 @@ start_mariadb() {
 }
 
 start_httpd() {
+  if HTTPD_PID="$(reuse_running_service httpd)"; then
+    wait_for_httpd
+    return 0
+  fi
+
   /usr/sbin/httpd -DFOREGROUND >/var/log/issabel-httpd.log 2>&1 &
   HTTPD_PID=$!
   wait_for_httpd
 }
 
 start_asterisk() {
+  if ASTERISK_PID="$(reuse_running_service asterisk)"; then
+    wait_for_asterisk
+    return 0
+  fi
+
   asterisk -U asterisk -G asterisk -fvvvg >/var/log/issabel-asterisk.log 2>&1 &
   ASTERISK_PID=$!
   wait_for_asterisk
