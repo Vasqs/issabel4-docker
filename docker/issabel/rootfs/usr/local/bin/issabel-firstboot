@@ -11,6 +11,7 @@ CALLCENTER_DB_PASSWORD="${ISSABEL_CALLCENTER_DB_PASSWORD:-asterisk}"
 MYSQL_ROOT_PASSWORD="${ISSABEL_MYSQL_ROOT_PASSWORD:-iSsAbEl.2o17}"
 ASTERISK_PACKAGE="${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}"
 INSTALL_ISSABELBR_POST_PATCH="${ISSABEL_INSTALL_ISSABELBR_POST_PATCH:-1}"
+HTTPS_REDIRECT_PORT="${ISSABEL_HTTPS_PORT:-8443}"
 ISSABELBR_POST_PATCH_URL="https://raw.githubusercontent.com/ibinetwork/IssabelBR/refs/heads/master/patch-issabelbr.sh"
 ISSABELBR_POST_PATCH_LOG="/var/log/issabelbr-post-install.log"
 ISSABELBR_MYSQL_WRAPPER="/usr/local/bin/issabelbr-mysql-wrapper"
@@ -112,6 +113,57 @@ read_php_conf_value() {
   grep -E "^\\\$amp_conf\\['${key}'\\]" "$file_path" | tail -n 1 | sed -E "s/^.*=[[:space:]]*'([^']*)';/\\1/"
 }
 
+read_manager_credentials() {
+  local file_path="${1:-/etc/asterisk/manager.conf}"
+
+  [ -f "$file_path" ] || return 1
+  awk '
+    /^[[:space:]]*[;#]/ { next }
+    /^[[:space:]]*\[/ {
+      if (match($0, /^[[:space:]]*\[([^]]+)\]/, parts)) {
+        section = parts[1]
+        order[++count] = section
+      }
+      next
+    }
+    /^[[:space:]]*[A-Za-z0-9_]+[[:space:]]*=/ {
+      split($0, kv, "=")
+      key = kv[1]
+      value = substr($0, index($0, "=") + 1)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      data[section ":" key] = value
+    }
+    END {
+      preferred = ""
+      fallback = ""
+      for (i = 1; i <= count; ++i) {
+        current = order[i]
+        if (current == "general") {
+          continue
+        }
+        secret = data[current ":secret"]
+        readperm = data[current ":read"]
+        writeperm = data[current ":write"]
+        if (secret != "" && readperm != "" && writeperm != "") {
+          if (current == "admin") {
+            preferred = current "\t" secret
+            break
+          }
+          if (fallback == "") {
+            fallback = current "\t" secret
+          }
+        }
+      }
+      if (preferred != "") {
+        print preferred
+      } else if (fallback != "") {
+        print fallback
+      }
+    }
+  ' "$file_path"
+}
+
 upsert_config_value() {
   local file_path="$1"
   local key="$2"
@@ -159,6 +211,37 @@ ensure_php_conf_value() {
   fi
 }
 
+reconcile_http_redirect_port() {
+  local file_path="/etc/httpd/conf.d/issabel.conf"
+
+  [ -f "$file_path" ] || return 0
+  perl -0pi -e 's#RewriteRule \(.\*\) https://%\{HTTP_HOST\}%\{REQUEST_URI\}#RewriteCond %{HTTP_HOST} ^([^:]+)(?::\d+)?$\n    RewriteRule (.*) https://%1:'"$HTTPS_REDIRECT_PORT"'%{REQUEST_URI}#g' "$file_path"
+}
+
+reconcile_manager_secret() {
+  local ami_user="$1"
+  local ami_password="$2"
+  local file_path="/etc/asterisk/manager.conf"
+  local escaped_password
+
+  [ -f "$file_path" ] || return 0
+
+  escaped_password="$(printf '%s' "$ami_password" | sed 's/[\/&]/\\&/g')"
+  perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?^secret\s*=\s*).*$#${1}'"$escaped_password"'#ms' "$file_path"
+  if ! grep -q "^\[$ami_user\]" "$file_path"; then
+    cat >>"$file_path" <<EOF
+
+[$ami_user]
+secret = $ami_password
+deny=0.0.0.0/0.0.0.0
+permit=127.0.0.1/255.255.255.0
+read = system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate
+write = system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate
+writetimeout = 5000
+EOF
+  fi
+}
+
 reconcile_database_configs() {
   ensure_config_value "/etc/amportal.conf" "AMPDBUSER" "$PBX_DB_USER"
   ensure_config_value "/etc/amportal.conf" "AMPDBPASS" "$PBX_DB_PASSWORD"
@@ -169,19 +252,60 @@ reconcile_database_configs() {
   ensure_config_value "/opt/issabel/dialer/dialerd.conf" "dbpass" "$CALLCENTER_DB_PASSWORD"
 }
 
-reconcile_legacy_credentials() {
-  local ami_admin_password
+reconcile_callcenter_ami_config() {
+  local ami_user="$1"
+  local ami_password="$2"
+  local valor_config_table
 
-  ami_admin_password="$(read_config_value "/etc/amportal.conf" "AMPMGRPASS" || true)"
-  if [ -z "$ami_admin_password" ]; then
-    ami_admin_password="$(read_php_conf_value "/etc/issabelpbx.conf" "AMPMGRPASS" || true)"
+  valor_config_table="$(mysql_root -N -B -e "USE call_center; SHOW TABLES LIKE 'valor_config';" 2>/dev/null || true)"
+  [ "$valor_config_table" = "valor_config" ] || return 0
+
+  mysql_root <<SQL
+DELETE FROM call_center.valor_config
+WHERE config_key IN ('asterisk.asthost', 'asterisk.astuser', 'asterisk.astpass');
+INSERT INTO call_center.valor_config (config_key, config_value)
+VALUES
+  ('asterisk.asthost', '127.0.0.1'),
+  ('asterisk.astuser', '$(sql_escape "$ami_user")'),
+  ('asterisk.astpass', '$(sql_escape "$ami_password")');
+SQL
+}
+
+reconcile_ami_credentials() {
+  local ami_admin_user
+  local ami_admin_password
+  local manager_credentials
+
+  ami_admin_user="$(read_config_value "/etc/amportal.conf" "AMPMGRUSER" || true)"
+  if [ -z "$ami_admin_user" ]; then
+    ami_admin_user="$(read_php_conf_value "/etc/issabelpbx.conf" "AMPMGRUSER" || true)"
   fi
+  if [ -z "$ami_admin_user" ]; then
+    ami_admin_user="admin"
+  fi
+
+  manager_credentials="$(read_manager_credentials "/etc/asterisk/manager.conf" || true)"
+  if [ -n "$manager_credentials" ]; then
+    IFS=$'\t' read -r ami_admin_user ami_admin_password <<<"$manager_credentials"
+  else
+    ami_admin_password="$(read_config_value "/etc/amportal.conf" "AMPMGRPASS" || true)"
+    if [ -z "$ami_admin_password" ]; then
+      ami_admin_password="$(read_php_conf_value "/etc/issabelpbx.conf" "AMPMGRPASS" || true)"
+    fi
+  fi
+
   if [ -z "$ami_admin_password" ]; then
     ami_admin_password="amp111"
   fi
 
-  upsert_config_value "$LEGACY_CREDENTIALS_FILE" "mysqlrootpwd" "$MYSQL_ROOT_PASSWORD"
+  reconcile_manager_secret "$ami_admin_user" "$ami_admin_password"
   upsert_config_value "$LEGACY_CREDENTIALS_FILE" "amiadminpwd" "$ami_admin_password"
+  reconcile_callcenter_ami_config "$ami_admin_user" "$ami_admin_password"
+}
+
+reconcile_legacy_credentials() {
+  upsert_config_value "$LEGACY_CREDENTIALS_FILE" "mysqlrootpwd" "$MYSQL_ROOT_PASSWORD"
+  reconcile_ami_credentials
   chmod 600 "$LEGACY_CREDENTIALS_FILE" || true
 }
 
@@ -283,6 +407,7 @@ main() {
   seed_pbx_schema
   reconcile_database_configs
   reconcile_legacy_credentials
+  reconcile_http_redirect_port
 
   if [ -f "$MARKER" ]; then
     exit 0
