@@ -12,6 +12,12 @@ MYSQL_ROOT_PASSWORD="${ISSABEL_MYSQL_ROOT_PASSWORD:-iSsAbEl.2o17}"
 ASTERISK_PACKAGE="${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}"
 INSTALL_ISSABELBR_POST_PATCH="${ISSABEL_INSTALL_ISSABELBR_POST_PATCH:-1}"
 HTTPS_REDIRECT_PORT="${ISSABEL_HTTPS_PORT:-8443}"
+SIP_PORT="${ISSABEL_SIP_PORT:-5060}"
+SIP_BIND_ADDRESS="${ISSABEL_SIP_BIND_ADDRESS:-0.0.0.0}"
+SIP_EXTERNAL_ADDRESS="${ISSABEL_SIP_EXTERNAL_ADDRESS:-}"
+SIP_LOCALNETS="${ISSABEL_SIP_LOCALNETS:-}"
+RTP_START="${ISSABEL_RTP_START:-10000}"
+RTP_END="${ISSABEL_RTP_END:-10100}"
 ISSABELBR_POST_PATCH_URL="https://raw.githubusercontent.com/ibinetwork/IssabelBR/refs/heads/master/patch-issabelbr.sh"
 ISSABELBR_POST_PATCH_LOG="/var/log/issabelbr-post-install.log"
 ISSABELBR_MYSQL_WRAPPER="/usr/local/bin/issabelbr-mysql-wrapper"
@@ -211,11 +217,85 @@ ensure_php_conf_value() {
   fi
 }
 
+normalize_network_lines() {
+  tr ', ' '\n\n' | sed '/^$/d'
+}
+
+detect_sip_localnets() {
+  local discovered
+
+  discovered="$(ip -4 -o route show scope link 2>/dev/null | awk '{print $1}' | sed '/^default$/d' || true)"
+  if [ -n "$discovered" ]; then
+    printf '%s\n' "$discovered" | normalize_network_lines
+    return 0
+  fi
+
+  ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | normalize_network_lines || true
+}
+
+render_sip_external_setting() {
+  local address="$1"
+
+  [ -n "$address" ] || return 0
+  if [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'externip=%s\n' "$address"
+  else
+    printf 'externhost=%s\nexternrefresh=60\n' "$address"
+  fi
+}
+
+reconcile_sip_bridge_settings() {
+  local sip_file="/etc/asterisk/sip_general_custom.conf"
+  local rtp_file="/etc/asterisk/rtp_custom.conf"
+  local localnets
+
+  localnets="$SIP_LOCALNETS"
+  if [ -z "$localnets" ]; then
+    localnets="$(detect_sip_localnets)"
+  fi
+
+  {
+    printf '; Managed by issabel-firstboot for Docker bridge SIP access\n'
+    printf 'udpbindaddr=%s:%s\n' "$SIP_BIND_ADDRESS" "$SIP_PORT"
+    printf 'nat=force_rport,comedia\n'
+    render_sip_external_setting "$SIP_EXTERNAL_ADDRESS"
+    while IFS= read -r network; do
+      [ -n "$network" ] || continue
+      printf 'localnet=%s\n' "$network"
+    done <<<"$localnets"
+  } >"$sip_file"
+
+  {
+    printf '; Managed by issabel-firstboot for Docker bridge RTP access\n'
+    printf 'rtpstart=%s\n' "$RTP_START"
+    printf 'rtpend=%s\n' "$RTP_END"
+  } >"$rtp_file"
+
+  chown asterisk:asterisk "$sip_file" "$rtp_file" 2>/dev/null || true
+}
+
 reconcile_http_redirect_port() {
   local file_path="/etc/httpd/conf.d/issabel.conf"
 
   [ -f "$file_path" ] || return 0
-  perl -0pi -e 's#RewriteRule \(.\*\) https://%\{HTTP_HOST\}%\{REQUEST_URI\}#RewriteCond %{HTTP_HOST} ^([^:]+)(?::\d+)?$\n    RewriteRule (.*) https://%1:'"$HTTPS_REDIRECT_PORT"'%{REQUEST_URI}#g' "$file_path"
+  python3 - "$file_path" "$HTTPS_REDIRECT_PORT" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+https_port = sys.argv[2]
+text = path.read_text()
+original = """    RewriteCond %{HTTPS} off
+    RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI}
+"""
+replacement = f"""    RewriteCond %{{HTTPS}} off
+    RewriteCond %{{HTTP_HOST}} ^([^:]+)(?::\\d+)?$
+    RewriteRule (.*) https://%1:{https_port}%{{REQUEST_URI}}
+"""
+if original in text:
+    text = text.replace(original, replacement, 1)
+path.write_text(text)
+PY
 }
 
 reconcile_manager_secret() {
@@ -399,6 +479,27 @@ apply_issabelbr_post_patch() {
   )
 }
 
+ensure_httpd_running() {
+  if pgrep -x httpd >/dev/null 2>&1; then
+    return 0
+  fi
+
+  /usr/sbin/httpd -DFOREGROUND >/var/log/issabel-httpd.log 2>&1 &
+}
+
+ensure_asterisk_running() {
+  if pgrep -x asterisk >/dev/null 2>&1; then
+    return 0
+  fi
+
+  safe_asterisk -U asterisk -G asterisk >/var/log/issabel-safe_asterisk.log 2>&1 &
+}
+
+ensure_runtime_services() {
+  ensure_httpd_running
+  ensure_asterisk_running
+}
+
 main() {
   reconcile_web_admin
   wait_for_mariadb
@@ -407,6 +508,7 @@ main() {
   seed_pbx_schema
   reconcile_database_configs
   reconcile_legacy_credentials
+  reconcile_sip_bridge_settings
   reconcile_http_redirect_port
 
   if [ -f "$MARKER" ]; then
@@ -416,6 +518,7 @@ main() {
   apply_issabel_repairs
   configure_el7_repositories
   apply_issabelbr_post_patch
+  ensure_runtime_services
   touch "$MARKER"
 }
 
