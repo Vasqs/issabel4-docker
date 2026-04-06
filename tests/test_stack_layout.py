@@ -175,6 +175,8 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("mysql_install_db", bootstrap_text)
         self.assertIn("systemctl enable mariadb httpd", bootstrap_text)
         self.assertIn("/tftpboot", bootstrap_text)
+        self.assertIn("start_callcenter", bootstrap_text)
+        self.assertIn("issabeldialer", bootstrap_text)
 
         firstboot_text = firstboot_script.read_text()
         self.assertIn("CREATE DATABASE IF NOT EXISTS asterisk;", firstboot_text)
