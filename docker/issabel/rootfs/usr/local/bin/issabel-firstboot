@@ -297,7 +297,7 @@ reconcile_http_redirect_port() {
   local file_path="/etc/httpd/conf.d/issabel.conf"
 
   [ -f "$file_path" ] || return 0
-  python3 - "$file_path" "$HTTPS_REDIRECT_PORT" <<'PY'
+  python - "$file_path" "$HTTPS_REDIRECT_PORT" <<'PY'
 from pathlib import Path
 import sys
 
@@ -307,10 +307,10 @@ text = path.read_text()
 original = """    RewriteCond %{HTTPS} off
     RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI}
 """
-replacement = f"""    RewriteCond %{{HTTPS}} off
-    RewriteCond %{{HTTP_HOST}} ^([^:]+)(?::\\d+)?$
-    RewriteRule (.*) https://%1:{https_port}%{{REQUEST_URI}}
-"""
+replacement = """    RewriteCond %%{HTTPS} off
+    RewriteCond %%{HTTP_HOST} ^([^:]+)(?::\\d+)?$
+    RewriteRule (.*) https://%%1:%s%%{REQUEST_URI}
+""" % https_port
 if original in text:
     text = text.replace(original, replacement, 1)
 path.write_text(text)
@@ -322,6 +322,8 @@ reconcile_manager_secret() {
   local ami_password="$2"
   local file_path="/etc/asterisk/manager.conf"
   local escaped_password
+  local read_permissions="system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate"
+  local write_permissions="system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate"
 
   [ -f "$file_path" ] || return 0
 
@@ -334,10 +336,14 @@ reconcile_manager_secret() {
 secret = $ami_password
 deny=0.0.0.0/0.0.0.0
 permit=127.0.0.1/255.255.255.0
-read = system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate
-write = system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate
+read = $read_permissions
+write = $write_permissions
 writetimeout = 5000
 EOF
+  else
+    perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?)(?=^\[|\z)#$1\nread = '"$read_permissions"'\n#ms unless $1 =~ /^read\s*=/m' "$file_path"
+    perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?)(?=^\[|\z)#$1\nwrite = '"$write_permissions"'\n#ms unless $1 =~ /^write\s*=/m' "$file_path"
+    perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?)(?=^\[|\z)#$1\nwritetimeout = 5000\n#ms unless $1 =~ /^writetimeout\s*=/m' "$file_path"
   fi
 }
 
