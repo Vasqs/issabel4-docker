@@ -9,3 +9,4 @@ modules/*
 overlays/*
 !overlays/README.md
 .playwright-mcp/
+.worktrees/
