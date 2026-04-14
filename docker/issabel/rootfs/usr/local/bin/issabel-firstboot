@@ -170,25 +170,6 @@ read_manager_credentials() {
   ' "$file_path"
 }
 
-find_manager_credentials() {
-  local manager_credentials
-  local file_path
-
-  for file_path in \
-    /etc/asterisk/manager.conf \
-    /etc/asterisk/manager_additional.conf \
-    /etc/asterisk/manager_custom.conf
-  do
-    manager_credentials="$(read_manager_credentials "$file_path" || true)"
-    if [ -n "$manager_credentials" ]; then
-      printf '%s\n' "$manager_credentials"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
 upsert_config_value() {
   local file_path="$1"
   local key="$2"
@@ -298,12 +279,13 @@ reconcile_http_redirect_port() {
 
   [ -f "$file_path" ] || return 0
   python - "$file_path" "$HTTPS_REDIRECT_PORT" <<'PY'
-from pathlib import Path
+import io
 import sys
 
-path = Path(sys.argv[1])
+path = sys.argv[1]
 https_port = sys.argv[2]
-text = path.read_text()
+with io.open(path, 'r', encoding='utf-8') as fh:
+    text = fh.read()
 original = """    RewriteCond %{HTTPS} off
     RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI}
 """
@@ -313,7 +295,8 @@ replacement = """    RewriteCond %%{HTTPS} off
 """ % https_port
 if original in text:
     text = text.replace(original, replacement, 1)
-path.write_text(text)
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text)
 PY
 }
 
@@ -321,30 +304,111 @@ reconcile_manager_secret() {
   local ami_user="$1"
   local ami_password="$2"
   local file_path="/etc/asterisk/manager.conf"
-  local escaped_password
   local read_permissions="system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate"
   local write_permissions="system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate"
 
   [ -f "$file_path" ] || return 0
 
-  escaped_password="$(printf '%s' "$ami_password" | sed 's/[\/&]/\\&/g')"
-  perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?^secret\s*=\s*).*$#${1}'"$escaped_password"'#ms' "$file_path"
-  if ! grep -q "^\[$ami_user\]" "$file_path"; then
-    cat >>"$file_path" <<EOF
+  python - "$file_path" "$ami_user" "$ami_password" "$read_permissions" "$write_permissions" <<'PY'
+import io
+import sys
 
-[$ami_user]
-secret = $ami_password
-deny=0.0.0.0/0.0.0.0
-permit=127.0.0.1/255.255.255.0
-read = $read_permissions
-write = $write_permissions
-writetimeout = 5000
-EOF
-  else
-    perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?)(?=^\[|\z)#$1\nread = '"$read_permissions"'\n#ms unless $1 =~ /^read\s*=/m' "$file_path"
-    perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?)(?=^\[|\z)#$1\nwrite = '"$write_permissions"'\n#ms unless $1 =~ /^write\s*=/m' "$file_path"
-    perl -0pi -e 's#(\['"$ami_user"'\][^\[]*?)(?=^\[|\z)#$1\nwritetimeout = 5000\n#ms unless $1 =~ /^writetimeout\s*=/m' "$file_path"
-  fi
+path = sys.argv[1]
+ami_user = sys.argv[2]
+ami_password = sys.argv[3]
+read_permissions = sys.argv[4]
+write_permissions = sys.argv[5]
+
+with io.open(path, 'r', encoding='utf-8') as fh:
+    lines = fh.read().splitlines()
+sections = []
+current_header = None
+current_lines = []
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith('[') and stripped.endswith(']'):
+        if current_header is not None:
+            sections.append((current_header, current_lines))
+        current_header = stripped[1:-1]
+        current_lines = [line]
+    else:
+        if current_header is None:
+            current_header = ''
+        current_lines.append(line)
+if current_header is not None:
+    sections.append((current_header, current_lines))
+
+if not any(header == 'general' for header, _ in sections):
+    sections.insert(0, ('general', ['[general]']))
+
+new_sections = []
+ami_found = False
+for header, section_lines in sections:
+    if header == 'general':
+        updated = []
+        channelvars_found = False
+        port_index = None
+        for idx, line in enumerate(section_lines):
+            stripped = line.strip()
+            if stripped.startswith('channelvars'):
+                updated.append('channelvars = DIALERID,DIALERVAR')
+                channelvars_found = True
+            else:
+                updated.append(line)
+            if stripped.startswith('port'):
+                port_index = len(updated) - 1
+        if not channelvars_found:
+            insert_at = port_index + 1 if port_index is not None else len(updated)
+            updated.insert(insert_at, 'channelvars = DIALERID,DIALERVAR')
+        new_sections.append((header, updated))
+        continue
+
+    if header != ami_user:
+        new_sections.append((header, section_lines))
+        continue
+
+    ami_found = True
+    updated = ['[{0}]'.format(ami_user)]
+    preserved = []
+    for line in section_lines[1:]:
+        stripped = line.strip()
+        if stripped == '':
+            continue
+        if stripped.startswith(('secret', 'deny', 'permit', 'read', 'write', 'writetimeout')):
+            continue
+        preserved.append(line)
+    updated.extend([
+        'secret = {0}'.format(ami_password),
+        'deny=0.0.0.0/0.0.0.0',
+        'permit=127.0.0.1/255.255.255.0',
+        'read = {0}'.format(read_permissions),
+        'write = {0}'.format(write_permissions),
+        'writetimeout = 5000',
+    ])
+    updated.extend(preserved)
+    new_sections.append((header, updated))
+
+if not ami_found:
+    new_sections.append((ami_user, [
+        '[{0}]'.format(ami_user),
+        'secret = {0}'.format(ami_password),
+        'deny=0.0.0.0/0.0.0.0',
+        'permit=127.0.0.1/255.255.255.0',
+        'read = {0}'.format(read_permissions),
+        'write = {0}'.format(write_permissions),
+        'writetimeout = 5000',
+    ]))
+
+output = []
+for idx, (_, section_lines) in enumerate(new_sections):
+    if idx > 0 and output and output[-1] != '':
+        output.append('')
+    output.extend(section_lines)
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(u'\n'.join(output) + u'\n')
+PY
 }
 
 normalize_agents_conf() {
@@ -388,7 +452,6 @@ SQL
 reconcile_ami_credentials() {
   local ami_admin_user
   local ami_admin_password
-  local manager_credentials
 
   ami_admin_user="$(read_config_value "/etc/amportal.conf" "AMPMGRUSER" || true)"
   if [ -z "$ami_admin_user" ]; then
@@ -398,14 +461,9 @@ reconcile_ami_credentials() {
     ami_admin_user="admin"
   fi
 
-  manager_credentials="$(find_manager_credentials || true)"
-  if [ -n "$manager_credentials" ]; then
-    IFS=$'\t' read -r ami_admin_user ami_admin_password <<<"$manager_credentials"
-  else
-    ami_admin_password="$(read_config_value "/etc/amportal.conf" "AMPMGRPASS" || true)"
-    if [ -z "$ami_admin_password" ]; then
-      ami_admin_password="$(read_php_conf_value "/etc/issabelpbx.conf" "AMPMGRPASS" || true)"
-    fi
+  ami_admin_password="$(read_config_value "/etc/amportal.conf" "AMPMGRPASS" || true)"
+  if [ -z "$ami_admin_password" ]; then
+    ami_admin_password="$(read_php_conf_value "/etc/issabelpbx.conf" "AMPMGRPASS" || true)"
   fi
 
   if [ -z "$ami_admin_password" ]; then
@@ -553,6 +611,9 @@ main() {
   apply_issabel_repairs
   configure_el7_repositories
   apply_issabelbr_post_patch
+  reconcile_legacy_credentials
+  reconcile_sip_bridge_settings
+  reconcile_http_redirect_port
   ensure_runtime_services
   touch "$MARKER"
 }
