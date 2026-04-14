@@ -19,6 +19,7 @@ This project packages Issabel 4 for local development with Docker, using the loc
 - [`docker/issabel/Dockerfile`](/home/vasqs/Projetos/Issabel/docker/issabel/Dockerfile): local image build
 - [`docker/issabel/rootfs/usr/local/bin/bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/bootstrap-issabel): runtime process supervisor
 - [`docker/issabel/rootfs/usr/local/bin/issabel-firstboot`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/issabel-firstboot): first-boot and credential reconciliation
+- [`docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets): build-time IssabelBR package and asset integration
 - [`scripts/resolve-install-profile.py`](/home/vasqs/Projetos/Issabel/scripts/resolve-install-profile.py): guided installer for ISO, Asterisk package and optional modules
 - [`scripts/up.sh`](/home/vasqs/Projetos/Issabel/scripts/up.sh): build and start stack
 - [`scripts/build-image.sh`](/home/vasqs/Projetos/Issabel/scripts/build-image.sh): build image only
@@ -53,12 +54,12 @@ This project packages Issabel 4 for local development with Docker, using the loc
 Build-time choices are kept out of `.env`.
 
 - `.issabel-install.conf` stores the selected ISO, Asterisk package and optional module keys
-- `.issabel-install.conf` also stores whether the IssabelBR post-install patch should run on first boot
+- `.issabel-install.conf` also stores whether the IssabelBR payload should be baked into the image build
 - `.build/install.env` is generated from that profile and sourced by the build scripts
 - the wizard detects available `asteriskXX` packages directly from the ISO contents
 - `callcenter` is shown only when the selected Asterisk package is `asterisk11`
-- the IssabelBR post-install patch prompt defaults to enabled for new profiles
-- the runtime always rewrites `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror without performing a full OS migration or upgrade
+- the IssabelBR build payload prompt defaults to enabled for new profiles
+- when enabled, the image build rewrites `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror without performing a full OS migration or upgrade
 - non-interactive executions reuse the saved profile instead of prompting
 
 ## Credentials
@@ -77,6 +78,12 @@ Current defaults are defined in [.env](/home/vasqs/Projetos/Issabel/.env):
 The bootstrap reconciles this web admin user into `/var/www/db/acl.db` on every container start. If you change these values, recreate the container:
 
 `docker compose up -d --build --force-recreate issabel`
+
+Runtime contract:
+
+- `docker compose restart issabel` reuses the current container and does not revisit build-time provisioning
+- `docker compose up -d --force-recreate issabel` creates a new container and reruns only lightweight first-boot reconciliation
+- `docker compose down && docker compose up -d` also creates a new container and therefore reruns the same lightweight reconciliation path
 
 ## Workspace exposure
 

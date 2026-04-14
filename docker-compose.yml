@@ -12,6 +12,7 @@ services:
       args:
         ASTERISK_PACKAGE: ${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}
         OPTIONAL_PACKAGES: ${ISSABEL_INSTALL_OPTIONAL_PACKAGES:-}
+        INSTALL_ISSABELBR_POST_PATCH: ${ISSABEL_INSTALL_ISSABELBR_POST_PATCH:-1}
     environment:
       ISABEL_BOOTSTRAP_MARKER: /var/lib/issabel/.bootstrapped
       WORKSPACE_ROOT: /workspace
