@@ -6,14 +6,6 @@ tests/__pycache__/
 issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso
 modules/*
 !modules/README.md
-!modules/dialer-agent-bootstrap-fix/
-!modules/dialer-agent-bootstrap-fix/hooks/
-!modules/dialer-agent-bootstrap-fix/hooks/apply.sh
-!modules/dialer-agent-bootstrap-fix/hooks/revert.sh
-!modules/agent-console-sip-login-fix/
-!modules/agent-console-sip-login-fix/hooks/
-!modules/agent-console-sip-login-fix/hooks/apply.sh
-!modules/agent-console-sip-login-fix/hooks/revert.sh
 overlays/*
 !overlays/README.md
 .playwright-mcp/
