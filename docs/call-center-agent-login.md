@@ -65,29 +65,20 @@ If a SIP agent exists, the runtime hook ensures:
 - the queue has `eventwhencalled=yes`
 - the dialer is restarted so it reloads membership state
 
-## Runtime Hooks
+## Bootstrap
 
-### `modules/dialer-agent-bootstrap-fix`
+The active fix is now the container bootstrap in
+`docker/issabel/rootfs/usr/local/bin/issabel-firstboot`.
 
-Persists the dialer-side fixes in `AMIEventProcess.class.php`:
+It is responsible for:
 
-- delay agent-list processing until AMI is ready
-- keep pending agent lists across AMI reconnects
-- preserve `Agent/N` sessions when `PeerStatus(Unregistered)` belongs to a
-  shared SIP peer
-- only force-logoff the dynamic agent in that conflict case
+- reconciling AMI credentials from the PBX configuration
+- normalizing `/etc/asterisk/manager.conf` so `admin` keeps the required
+  `read`, `write`, `originate`, and `channelvars` settings
+- aligning `call_center.valor_config` with the same AMI user/password
 
-### `modules/agent-console-sip-login-fix`
-
-Persists the UI/runtime compatibility fixes:
-
-- Agent Console lists all active agents, not only static ones
-- the UI prefers `Agent/*` as the selected agent when both `Agent/*` and
-  `SIP/*` exist
-- writes the correct `QPENALTY` key for SIP agents (`S1001`, not `SIP1001`)
-- ensures queue event flags are enabled
-- optionally injects legacy `Agent/*` queue members into active campaign queues
-  when they are missing
+The previous runtime hook modules were removed after the bootstrap fix proved
+stable enough for both `Agent/*` and `SIP/*` logins.
 
 ## Validation
 
@@ -97,7 +88,7 @@ The repository includes HTTP-level regression coverage in:
 
 Covered checks:
 
-- static `Agent/1` login starts without `Invalid agent number`
+- static `Agent/1` login no longer fails with `Invalid agent number` or `Specified agent not found`
 - dynamic `SIP/1001` login starts without `Invalid agent number`
 - Agent Console prefers `Agent/1` when both `Agent/1` and `SIP/1001` exist
 
