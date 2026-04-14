@@ -10,7 +10,6 @@ CALLCENTER_DB_USER="${ISSABEL_CALLCENTER_DB_USER:-asterisk}"
 CALLCENTER_DB_PASSWORD="${ISSABEL_CALLCENTER_DB_PASSWORD:-asterisk}"
 MYSQL_ROOT_PASSWORD="${ISSABEL_MYSQL_ROOT_PASSWORD:-iSsAbEl.2o17}"
 ASTERISK_PACKAGE="${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}"
-INSTALL_ISSABELBR_POST_PATCH="${ISSABEL_INSTALL_ISSABELBR_POST_PATCH:-1}"
 HTTPS_REDIRECT_PORT="${ISSABEL_HTTPS_PORT:-8443}"
 SIP_PORT="${ISSABEL_SIP_PORT:-5060}"
 SIP_BIND_ADDRESS="${ISSABEL_SIP_BIND_ADDRESS:-0.0.0.0}"
@@ -18,10 +17,6 @@ SIP_EXTERNAL_ADDRESS="${ISSABEL_SIP_EXTERNAL_ADDRESS:-}"
 SIP_LOCALNETS="${ISSABEL_SIP_LOCALNETS:-}"
 RTP_START="${ISSABEL_RTP_START:-10000}"
 RTP_END="${ISSABEL_RTP_END:-10100}"
-ISSABELBR_POST_PATCH_URL="https://raw.githubusercontent.com/ibinetwork/IssabelBR/refs/heads/master/patch-issabelbr.sh"
-ISSABELBR_POST_PATCH_LOG="/var/log/issabelbr-post-install.log"
-ISSABELBR_MYSQL_WRAPPER="/usr/local/bin/issabelbr-mysql-wrapper"
-EL7_REPO_CONFIGURATOR="/usr/local/bin/configure-el7-repositories"
 MYSQL_SOCKET="${ISSABEL_MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}"
 LEGACY_CREDENTIALS_FILE="${ISSABEL_LEGACY_CREDENTIALS_FILE:-/etc/issabel.conf}"
 
@@ -523,76 +518,6 @@ apply_issabel_repairs() {
   fi
 }
 
-configure_el7_repositories() {
-  "$EL7_REPO_CONFIGURATOR"
-}
-
-issabelbr_post_patch_is_supported() {
-  case "$ASTERISK_PACKAGE" in
-    asterisk11|asterisk13)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-apply_issabelbr_post_patch() {
-  case "${INSTALL_ISSABELBR_POST_PATCH,,}" in
-    1|true|yes|y|on) ;;
-    *)
-      return 0
-      ;;
-  esac
-
-  if ! issabelbr_post_patch_is_supported; then
-    echo "skipping IssabelBR post-install patch for unsupported package ${ASTERISK_PACKAGE}" >&2
-    return 0
-  fi
-
-  (
-    local script_path
-    local cleanup
-    local patch_wrapper_dir
-
-    script_path="$(mktemp /tmp/issabelbr-post-patch.XXXXXX.sh)"
-    patch_wrapper_dir="$(mktemp -d /tmp/issabelbr-post-patch-bin.XXXXXX)"
-    cleanup() {
-      rm -f "$script_path"
-      rm -rf "$patch_wrapper_dir"
-    }
-    trap cleanup EXIT
-    ln -s "$ISSABELBR_MYSQL_WRAPPER" "$patch_wrapper_dir/mysql"
-    wget -O "$script_path" "$ISSABELBR_POST_PATCH_URL"
-    chmod +x "$script_path"
-    PATH="$patch_wrapper_dir:$PATH" ISSABELBR_REAL_MYSQL="/usr/bin/mysql" \
-      ISSABELBR_MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
-      bash "$script_path" 2>&1 | tee "$ISSABELBR_POST_PATCH_LOG"
-  )
-}
-
-ensure_httpd_running() {
-  if pgrep -x httpd >/dev/null 2>&1; then
-    return 0
-  fi
-
-  /usr/sbin/httpd -DFOREGROUND >/var/log/issabel-httpd.log 2>&1 &
-}
-
-ensure_asterisk_running() {
-  if pgrep -x asterisk >/dev/null 2>&1; then
-    return 0
-  fi
-
-  safe_asterisk -U asterisk -G asterisk >/var/log/issabel-safe_asterisk.log 2>&1 &
-}
-
-ensure_runtime_services() {
-  ensure_httpd_running
-  ensure_asterisk_running
-}
-
 main() {
   reconcile_web_admin
   wait_for_mariadb
@@ -609,12 +534,6 @@ main() {
   fi
 
   apply_issabel_repairs
-  configure_el7_repositories
-  apply_issabelbr_post_patch
-  reconcile_legacy_credentials
-  reconcile_sip_bridge_settings
-  reconcile_http_redirect_port
-  ensure_runtime_services
   touch "$MARKER"
 }
 

@@ -2,6 +2,7 @@ FROM quay.io/centos/centos:7
 
 ARG ASTERISK_PACKAGE=asterisk18
 ARG OPTIONAL_PACKAGES=""
+ARG INSTALL_ISSABELBR_POST_PATCH=1
 
 ENV container=docker \
     LANG=en_US.UTF-8 \
@@ -36,7 +37,10 @@ RUN set -eux; \
 COPY docker/issabel/rootfs/ /
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/bootstrap-issabel /usr/local/bin/issabel-firstboot /usr/local/bin/sync-workspace /usr/local/bin/healthcheck-issabel /usr/local/bin/issabelbr-mysql-wrapper /usr/local/bin/configure-el7-repositories
+    chmod +x /usr/local/bin/bootstrap-issabel /usr/local/bin/issabel-firstboot /usr/local/bin/sync-workspace /usr/local/bin/healthcheck-issabel /usr/local/bin/issabelbr-mysql-wrapper /usr/local/bin/configure-el7-repositories /usr/local/bin/apply-issabelbr-build-assets; \
+    INSTALL_ISSABELBR_POST_PATCH="${INSTALL_ISSABELBR_POST_PATCH}" ASTERISK_PACKAGE="${ASTERISK_PACKAGE}" /usr/local/bin/apply-issabelbr-build-assets; \
+    yum clean all; \
+    rm -rf /var/cache/yum /usr/src/IssabelBR
 
 VOLUME ["/sys/fs/cgroup"]
 

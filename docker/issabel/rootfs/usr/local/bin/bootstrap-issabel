@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MARKER="${ISABEL_BOOTSTRAP_MARKER:-/var/lib/issabel/.bootstrapped}"
+BOOTSTRAP_LOG="${ISSABEL_BOOTSTRAP_LOG:-/var/log/issabel-bootstrap.log}"
 MARIADB_PID=""
 HTTPD_PID=""
 ASTERISK_PID=""
@@ -166,13 +167,14 @@ stop_services() {
 
 main() {
   trap stop_services EXIT INT TERM
+  exec > >(tee -a "$BOOTSTRAP_LOG") 2>&1
 
   prepare_filesystem
   prepare_database
 
   # systemctl enable mariadb httpd asterisk sshd issabel-firstboot
   start_mariadb
-  /usr/local/bin/issabel-firstboot || true
+  /usr/local/bin/issabel-firstboot
   start_httpd
   start_asterisk
   start_callcenter

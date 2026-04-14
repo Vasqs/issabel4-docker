@@ -13,8 +13,9 @@ This runbook describes how the local Issabel development stack is built, started
 
 Repository note:
 
-- the runtime rewrites `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror `https://el7.repo.almalinux.org/centos/CentOS-Base.repo`
+- when enabled for supported Asterisk versions, the image build rewrites `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror `https://el7.repo.almalinux.org/centos/CentOS-Base.repo`
 - this is a repository-source migration only; it does not run a full AlmaLinux OS conversion and does not force a system upgrade
+- the IssabelBR payload is now applied during image build instead of container startup
 
 ## Guided installation flow
 
@@ -26,7 +27,7 @@ The installer wizard is a build-time flow.
 4. detect available `asteriskXX` packages from the extracted repository
 5. choose the Asterisk package first
 6. choose the optional module profile and per-module adjustments second
-7. choose whether to apply the IssabelBR post-install patch on first boot
+7. choose whether to bake the IssabelBR payload into the image build
 8. persist the result in `.issabel-install.conf`
 9. generate `.build/install.env` for the build scripts
 10. refresh `.env` so direct `docker compose` runs use the same wizard selection
@@ -58,12 +59,14 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 - reconciling `/etc/issabel.conf` with `mysqlrootpwd` and `amiadminpwd` for legacy backup and restore workflows
 - reconciling the Issabel web admin user in `/var/www/db/acl.db`
 - assigning that user to the `administrator` group if missing
-- running `amportal chown` when available
-- rewriting `CentOS-Base.repo` to the AlmaLinux-hosted EL7 mirror before any optional post-install logic
-- downloading and executing the IssabelBR post-install patch when `ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1`
+- aligning `amportal.conf`, `issabelpbx.conf`, `dialerd.conf`, `manager.conf`, `sip_general_custom.conf`, `rtp_custom.conf`, and the HTTP redirect configuration
+- aligning `call_center.valor_config` with the reconciled AMI credentials
+- running `amportal chown` when available on the first pass of a container lifetime
 - marking first boot complete through `/var/lib/issabel/.bootstrapped`
 
 The web admin reconciliation runs before the marker check, so changing `.env` and recreating the container rotates the Issabel web password without deleting volumes.
+
+Heavy provisioning now happens during image build through [`apply-issabelbr-build-assets`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets). That helper is responsible for package installation, repository rewrites, cloning `ibinetwork/IssabelBR`, and copying the static web, audio, and Asterisk payloads into the image before the container is created.
 
 ## Backup and restore contract
 
