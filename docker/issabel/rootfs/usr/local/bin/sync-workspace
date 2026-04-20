@@ -55,9 +55,70 @@ module_source_root() {
   printf '%s/%s' "$MODULES_SOURCE_ROOT" "$module_name"
 }
 
+module_target_name_state_file() {
+  local module_name="$1"
+  printf '%s/target-name.txt' "$(module_runtime_root "$module_name")"
+}
+
+extract_module_name_from_menu_xml() {
+  local menu_xml="$1"
+
+  [ -f "$menu_xml" ] || return 0
+  sed -n \
+    -e 's/.*<item[[:space:]][^>]*id="\([^"]*\)".*/\1/p' \
+    -e 's/.*<menuitem[[:space:]][^>]*menuid="\([^"]*\)".*/\1/p' \
+    "$menu_xml" | head -n 1
+}
+
+module_target_name() {
+  local module_name="$1"
+  local module_root
+  local candidate
+  local resolved
+  local state_file
+
+  module_root="$(module_source_root "$module_name")"
+  if [ -d "$module_root" ]; then
+    for candidate in \
+      "${module_root}/module.name" \
+      "${module_root}/web/module.name"
+    do
+      if [ -f "$candidate" ]; then
+        resolved="$(head -n 1 "$candidate" | tr -d '\r' | xargs)"
+        if [ -n "$resolved" ]; then
+          printf '%s' "$resolved"
+          return 0
+        fi
+      fi
+    done
+
+    for candidate in \
+      "${module_root}/menu.xml" \
+      "${module_root}/web/menu.xml"
+    do
+      resolved="$(extract_module_name_from_menu_xml "$candidate")"
+      if [ -n "$resolved" ]; then
+        printf '%s' "$resolved"
+        return 0
+      fi
+    done
+  fi
+
+  state_file="$(module_target_name_state_file "$module_name")"
+  if [ -f "$state_file" ]; then
+    resolved="$(head -n 1 "$state_file" | tr -d '\r' | xargs)"
+    if [ -n "$resolved" ]; then
+      printf '%s' "$resolved"
+      return 0
+    fi
+  fi
+
+  printf '%s' "$module_name"
+}
+
 module_target_root() {
   local module_name="$1"
-  printf '%s/%s' "$MODULES_TARGET_ROOT" "$module_name"
+  printf '%s/%s' "$MODULES_TARGET_ROOT" "$(module_target_name "$module_name")"
 }
 
 module_state_root() {
@@ -107,6 +168,15 @@ sync_module_payload() {
   else
     rsync -a --delete "${payload_root}/" "${target_root}/"
   fi
+}
+
+record_module_target_name() {
+  local module_name="$1"
+  local state_file
+
+  state_file="$(module_target_name_state_file "$module_name")"
+  mkdir -p "$(dirname "$state_file")"
+  printf '%s\n' "$(module_target_name "$module_name")" >"$state_file"
 }
 
 snapshot_module_contract() {
@@ -487,6 +557,7 @@ apply_module() {
   local module_name="$1"
 
   ensure_state_dir "$module_name"
+  record_module_target_name "$module_name"
   sync_module_payload "$module_name"
   snapshot_module_contract "$module_name"
   apply_module_migrations "$module_name"

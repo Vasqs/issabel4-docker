@@ -400,6 +400,18 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("hooks/revert.sh", operations_text)
         self.assertIn("URL direta", operations_text)
 
+    def test_telephony_dashboard_apply_hook_registers_menu_idempotently(self) -> None:
+        apply_hook = (ROOT / "modules" / "telephony_dashboard" / "hooks" / "apply.sh").read_text()
+
+        self.assertIn("sqlite3 /var/www/db/menu.db", apply_hook)
+        self.assertIn("DELETE FROM menu WHERE id='telephony_dashboard'", apply_hook)
+        self.assertIn("WHERE NOT EXISTS", apply_hook)
+        self.assertIn("telephony_dashboard", apply_hook)
+        self.assertIn("sqlite3 /var/www/db/acl.db", apply_hook)
+        self.assertIn("INSERT INTO acl_resource", apply_hook)
+        self.assertIn("INSERT INTO acl_group_permission", apply_hook)
+        self.assertIn("ln -s", apply_hook)
+
     def test_sync_workspace_applies_and_reverts_web_root_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_root = Path(tmp_dir)
@@ -439,6 +451,92 @@ class IssabelStackLayoutTests(unittest.TestCase):
             self.assertEqual((web_root / "index.php").read_text(), "core-index\n")
             self.assertFalse((web_root / "themes" / "custom.css").exists())
             self.assertFalse((state_root / "overlays" / "theme-a").exists())
+
+    def test_sync_workspace_publishes_module_using_canonical_name_from_menu_xml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+            module_root = workspace_root / "modules" / "callcenter-bridge_issabel4"
+            web_payload_root = module_root / "web"
+
+            web_payload_root.mkdir(parents=True)
+            web_root.mkdir(parents=True)
+            modules_target.mkdir(parents=True)
+            state_root.mkdir(parents=True)
+
+            (web_payload_root / "index.php").write_text("<?php echo 'ok';\n")
+            (web_payload_root / "menu.xml").write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<menu>
+    <menucache>
+        <item id="callcenter_bridge">
+            <description>Callcenter Bridge</description>
+            <type>module</type>
+            <id_parent>pbxconfig</id_parent>
+            <link></link>
+            <order_no>98</order_no>
+        </item>
+    </menucache>
+</menu>
+"""
+            )
+
+            result = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((modules_target / "callcenter_bridge" / "index.php").exists())
+            self.assertTrue((modules_target / "callcenter_bridge" / "menu.xml").exists())
+            self.assertFalse((modules_target / "callcenter-bridge_issabel4").exists())
+
+    def test_sync_workspace_reverts_removed_module_using_recorded_canonical_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+            module_root = workspace_root / "modules" / "callcenter-bridge_issabel4"
+            web_payload_root = module_root / "web"
+
+            web_payload_root.mkdir(parents=True)
+            web_root.mkdir(parents=True)
+            modules_target.mkdir(parents=True)
+            state_root.mkdir(parents=True)
+
+            (web_payload_root / "index.php").write_text("<?php echo 'ok';\n")
+            (web_payload_root / "menu.xml").write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<menu>
+    <menucache>
+        <item id="callcenter_bridge">
+            <description>Callcenter Bridge</description>
+            <type>module</type>
+            <id_parent>pbxconfig</id_parent>
+            <link></link>
+            <order_no>98</order_no>
+        </item>
+    </menucache>
+</menu>
+"""
+            )
+
+            first_run = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(first_run.returncode, 0, first_run.stderr)
+            self.assertTrue((modules_target / "callcenter_bridge" / "index.php").exists())
+
+            for path in sorted(module_root.rglob("*"), reverse=True):
+                if path.is_file():
+                    path.unlink()
+                else:
+                    path.rmdir()
+            module_root.rmdir()
+
+            second_run = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(second_run.returncode, 0, second_run.stderr)
+            self.assertFalse((modules_target / "callcenter_bridge").exists())
+            self.assertFalse((state_root / "modules" / "callcenter-bridge_issabel4").exists())
 
     def test_sync_workspace_blocks_conflicting_web_root_overlays(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
