@@ -1,0 +1,84 @@
+#!/bin/bash
+set -euo pipefail
+
+INSTALL_ISSABELBR_POST_PATCH="${INSTALL_ISSABELBR_POST_PATCH:-1}"
+ASTERISK_PACKAGE="${ASTERISK_PACKAGE:-${ISSABEL_INSTALL_ASTERISK_PACKAGE:-}}"
+ISSABELBR_RUNTIME_ASSETS_DIR="${ISSABELBR_RUNTIME_ASSETS_DIR:-/opt/issabelbr-runtime-assets}"
+
+patch_is_enabled() {
+  case "${INSTALL_ISSABELBR_POST_PATCH,,}" in
+    1|true|yes|y|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+patch_is_supported() {
+  if [ -z "$ASTERISK_PACKAGE" ]; then
+    if rpm -q asterisk11 >/dev/null 2>&1; then
+      ASTERISK_PACKAGE="asterisk11"
+    elif rpm -q asterisk13 >/dev/null 2>&1; then
+      ASTERISK_PACKAGE="asterisk13"
+    fi
+  fi
+
+  case "$ASTERISK_PACKAGE" in
+    asterisk11|asterisk13)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+runtime_assets_available() {
+  [ -d "$ISSABELBR_RUNTIME_ASSETS_DIR/web" ] || return 1
+  [ -d "$ISSABELBR_RUNTIME_ASSETS_DIR/web2" ] || return 1
+  [ -d "$ISSABELBR_RUNTIME_ASSETS_DIR/etc-asterisk" ] || return 1
+  [ -d "$ISSABELBR_RUNTIME_ASSETS_DIR/audio" ] || return 1
+}
+
+apply_static_assets() {
+  rsync -a "$ISSABELBR_RUNTIME_ASSETS_DIR/repo/" /etc/yum.repos.d/ || true
+  rsync -a "$ISSABELBR_RUNTIME_ASSETS_DIR/web/" /var/www/html/
+  rsync -a -u "$ISSABELBR_RUNTIME_ASSETS_DIR/audio/" /var/lib/asterisk/sounds/
+  rsync -a "$ISSABELBR_RUNTIME_ASSETS_DIR/etc-asterisk/" /etc/asterisk/
+  rsync -a "$ISSABELBR_RUNTIME_ASSETS_DIR/web2/" /var/www/html/modules/
+}
+
+apply_file_reconciliations() {
+  sed -i '/extensions_tratamento_hangupcause.conf/d' /etc/asterisk/extensions_override_issabel.conf /etc/asterisk/extensions_override_issabelpbx.conf || true
+  echo "#include /etc/asterisk/extensions_tratamento_hangupcause.conf" >> /etc/asterisk/extensions_override_issabelpbx.conf
+  sed -i -r 's/666699/33697B/' /var/www/html/modules/pbxadmin/themes/default/css/mainstyle.css /var/www/html/admin/assets/css/mainstyle.css || true
+  sed -i -r 's/;musiconhold=default/musiconhold=none/' /etc/asterisk/agents.conf || true
+  chown asterisk:asterisk /etc/asterisk/extensions_tratamento_hangupcause.conf || true
+  chown -R asterisk:asterisk /var/lib/asterisk/agi-bin || true
+}
+
+main() {
+  if ! patch_is_enabled; then
+    echo "Skipping IssabelBR post-restore because INSTALL_ISSABELBR_POST_PATCH=${INSTALL_ISSABELBR_POST_PATCH}"
+    exit 0
+  fi
+
+  if ! patch_is_supported; then
+    echo "Skipping IssabelBR post-restore for unsupported package ${ASTERISK_PACKAGE}"
+    exit 0
+  fi
+
+  if ! runtime_assets_available; then
+    echo "WARN: IssabelBR runtime assets not available in ${ISSABELBR_RUNTIME_ASSETS_DIR}, skipping static reapply" >&2
+  else
+    apply_static_assets
+  fi
+
+  apply_file_reconciliations
+  /usr/local/bin/issabel-firstboot
+  /usr/sbin/amportal reload >/dev/null 2>&1 || true
+}
+
+main "$@"

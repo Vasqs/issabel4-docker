@@ -2,9 +2,10 @@
 set -euo pipefail
 
 INSTALL_ISSABELBR_POST_PATCH="${INSTALL_ISSABELBR_POST_PATCH:-1}"
-ASTERISK_PACKAGE="${ASTERISK_PACKAGE:-asterisk18}"
+ASTERISK_PACKAGE="${ASTERISK_PACKAGE:-${ISSABEL_INSTALL_ASTERISK_PACKAGE:-}}"
 ISSABELBR_REPO_DIR="${ISSABELBR_REPO_DIR:-/usr/src/IssabelBR}"
 EL7_REPO_CONFIGURATOR="${EL7_REPO_CONFIGURATOR:-/usr/local/bin/configure-el7-repositories}"
+ISSABELBR_RUNTIME_ASSETS_DIR="${ISSABELBR_RUNTIME_ASSETS_DIR:-/opt/issabelbr-runtime-assets}"
 SNGREP_REPO_FILE="/etc/yum.repos.d/irontec.repo"
 
 patch_is_enabled() {
@@ -19,6 +20,14 @@ patch_is_enabled() {
 }
 
 patch_is_supported() {
+  if [ -z "$ASTERISK_PACKAGE" ]; then
+    if rpm -q asterisk11 >/dev/null 2>&1; then
+      ASTERISK_PACKAGE="asterisk11"
+    elif rpm -q asterisk13 >/dev/null 2>&1; then
+      ASTERISK_PACKAGE="asterisk13"
+    fi
+  fi
+
   case "$ASTERISK_PACKAGE" in
     asterisk11|asterisk13)
       return 0
@@ -71,6 +80,16 @@ apply_static_assets() {
   rsync -a "${ISSABELBR_REPO_DIR}/web2/" /var/www/html/modules/
 }
 
+cache_runtime_assets() {
+  rm -rf "$ISSABELBR_RUNTIME_ASSETS_DIR"
+  mkdir -p "$ISSABELBR_RUNTIME_ASSETS_DIR"
+  rsync -a "${ISSABELBR_REPO_DIR}/repo/" "$ISSABELBR_RUNTIME_ASSETS_DIR/repo/" || true
+  rsync -a "${ISSABELBR_REPO_DIR}/web/" "$ISSABELBR_RUNTIME_ASSETS_DIR/web/"
+  rsync -a "${ISSABELBR_REPO_DIR}/audio/" "$ISSABELBR_RUNTIME_ASSETS_DIR/audio/"
+  rsync -a "${ISSABELBR_REPO_DIR}/etc/asterisk/" "$ISSABELBR_RUNTIME_ASSETS_DIR/etc-asterisk/"
+  rsync -a "${ISSABELBR_REPO_DIR}/web2/" "$ISSABELBR_RUNTIME_ASSETS_DIR/web2/"
+}
+
 apply_file_reconciliations() {
   sed -i '/extensions_tratamento_hangupcause.conf/d' /etc/asterisk/extensions_override_issabel.conf /etc/asterisk/extensions_override_issabelpbx.conf || true
   echo "#include /etc/asterisk/extensions_tratamento_hangupcause.conf" >> /etc/asterisk/extensions_override_issabelpbx.conf
@@ -94,6 +113,7 @@ main() {
   configure_el7_repositories
   install_runtime_tools
   clone_issabelbr_repo
+  cache_runtime_assets
   apply_static_assets
   apply_file_reconciliations
 }

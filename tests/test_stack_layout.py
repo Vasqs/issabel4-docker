@@ -114,8 +114,10 @@ class IssabelStackLayoutTests(unittest.TestCase):
         diagnose_script = ROOT / "scripts" / "diagnose.sh"
         build_script = ROOT / "scripts" / "build-image.sh"
         up_script = ROOT / "scripts" / "up.sh"
+        helper_wrapper = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "bin" / "issabel-helper"
         bootstrap_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "bootstrap-issabel"
         firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
+        post_restore_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-issabelbr-post-restore"
         install_profile_example = ROOT / ".issabel-install.conf.example"
         env_file = ROOT / ".env"
         env_example_file = ROOT / ".env.example"
@@ -133,8 +135,10 @@ class IssabelStackLayoutTests(unittest.TestCase):
             diagnose_script,
             build_script,
             up_script,
+            helper_wrapper,
             bootstrap_script,
             firstboot_script,
+            post_restore_script,
             install_profile_example,
             env_file,
             env_example_file,
@@ -152,7 +156,23 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("ARG INSTALL_ISSABELBR_POST_PATCH=1", dockerfile_text)
         self.assertIn("COPY .build/issabel-root /opt/issabel-root", dockerfile_text)
         self.assertIn("/usr/local/bin/apply-issabelbr-build-assets", dockerfile_text)
+        self.assertIn("/usr/local/bin/apply-issabelbr-post-restore", dockerfile_text)
+        self.assertIn("/usr/bin/issabel-helper", dockerfile_text)
         self.assertIn("ENTRYPOINT [\"/usr/local/bin/bootstrap-issabel\"]", dockerfile_text)
+
+        helper_wrapper_text = helper_wrapper.read_text()
+        self.assertIn('if [ "$1" = "backupengine" ]; then', helper_wrapper_text)
+        self.assertIn('if [ "$arg" = "--restore" ]; then', helper_wrapper_text)
+        self.assertIn('/usr/local/bin/apply-issabelbr-post-restore', helper_wrapper_text)
+
+        post_restore_text = post_restore_script.read_text()
+        self.assertIn('ISSABELBR_RUNTIME_ASSETS_DIR', post_restore_text)
+        self.assertIn('ISSABEL_INSTALL_ASTERISK_PACKAGE', post_restore_text)
+        self.assertIn('rpm -q asterisk11', post_restore_text)
+        self.assertIn('apply_static_assets', post_restore_text)
+        self.assertIn('apply_file_reconciliations', post_restore_text)
+        self.assertIn('/usr/local/bin/issabel-firstboot', post_restore_text)
+        self.assertIn('/usr/sbin/amportal reload', post_restore_text)
 
         prepare_text = prepare_script.read_text()
         self.assertIn("issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso", prepare_text)
@@ -218,10 +238,16 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("/etc/issabel.conf", firstboot_text)
         self.assertIn("mysqlrootpwd", firstboot_text)
         self.assertIn("amiadminpwd", firstboot_text)
+        self.assertIn("find_callcenter_schema", firstboot_text)
+        self.assertIn("seed_callcenter_schema", firstboot_text)
+        self.assertIn("SHOW TABLES LIKE 'agent'", firstboot_text)
+        self.assertIn("firstboot_call_center.sql", firstboot_text)
         self.assertIn("ISSABEL_MYSQL_ROOT_PASSWORD", firstboot_text)
         self.assertIn("/opt/issabel/dialer/dialerd.conf", firstboot_text)
         self.assertIn("reconcile_http_redirect_port", firstboot_text)
         self.assertIn("reconcile_manager_secret", firstboot_text)
+        self.assertIn("reconcile_manager_general_settings", firstboot_text)
+        self.assertIn("enabled = yes", firstboot_text)
         self.assertIn("reconcile_sip_bridge_settings", firstboot_text)
         self.assertIn("ISSABEL_SIP_BIND_ADDRESS", firstboot_text)
         self.assertIn("ISSABEL_SIP_EXTERNAL_ADDRESS", firstboot_text)
@@ -241,6 +267,13 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertNotIn("wget ", firstboot_text)
         self.assertNotIn("apply_issabelbr_post_patch", firstboot_text)
         self.assertNotIn("configure_el7_repositories", firstboot_text)
+
+        build_assets_text = (ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-issabelbr-build-assets").read_text()
+        self.assertIn("ISSABELBR_RUNTIME_ASSETS_DIR", build_assets_text)
+        self.assertIn("ISSABEL_INSTALL_ASTERISK_PACKAGE", build_assets_text)
+        self.assertIn("rpm -q asterisk11", build_assets_text)
+        self.assertIn("cache_runtime_assets", build_assets_text)
+        self.assertIn("/opt/issabelbr-runtime-assets", build_assets_text)
 
         env_text = env_file.read_text()
         env_example_text = env_example_file.read_text()
