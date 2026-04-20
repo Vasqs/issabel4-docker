@@ -37,7 +37,7 @@ RUN set -eux; \
 COPY docker/issabel/rootfs/ /
 
 RUN set -eux; \
-    chmod +x /usr/local/bin/bootstrap-issabel /usr/local/bin/issabel-firstboot /usr/local/bin/sync-workspace /usr/local/bin/healthcheck-issabel /usr/local/bin/issabelbr-mysql-wrapper /usr/local/bin/configure-el7-repositories /usr/local/bin/apply-issabelbr-build-assets; \
+    chmod +x /usr/bin/issabel-helper /usr/local/bin/bootstrap-issabel /usr/local/bin/issabel-firstboot /usr/local/bin/sync-workspace /usr/local/bin/healthcheck-issabel /usr/local/bin/issabelbr-mysql-wrapper /usr/local/bin/configure-el7-repositories /usr/local/bin/apply-issabelbr-build-assets /usr/local/bin/apply-issabelbr-post-restore; \
     INSTALL_ISSABELBR_POST_PATCH="${INSTALL_ISSABELBR_POST_PATCH}" ASTERISK_PACKAGE="${ASTERISK_PACKAGE}" /usr/local/bin/apply-issabelbr-build-assets; \
     yum clean all; \
     rm -rf /var/cache/yum /usr/src/IssabelBR

@@ -66,7 +66,9 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 
 The web admin reconciliation runs before the marker check, so changing `.env` and recreating the container rotates the Issabel web password without deleting volumes.
 
-Heavy provisioning now happens during image build through [`apply-issabelbr-build-assets`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets). That helper is responsible for package installation, repository rewrites, cloning `ibinetwork/IssabelBR`, and copying the static web, audio, and Asterisk payloads into the image before the container is created.
+Heavy provisioning now happens during image build through [`apply-issabelbr-build-assets`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets). That helper is responsible for package installation, repository rewrites, cloning `ibinetwork/IssabelBR`, and copying the static web, audio, and Asterisk payloads into the image before the container is created. The same build step also caches the applied IssabelBR payload under `/opt/issabelbr-runtime-assets` so it can be replayed later without rerunning package installation.
+
+After a successful web-driven restore, the local override for [`issabel-helper`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/bin/issabel-helper) runs [`apply-issabelbr-post-restore`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/apply-issabelbr-post-restore). That replay is intentionally runtime-safe: it reapplies the cached IssabelBR payload, reruns the Asterisk and web file reconciliations, invokes [`issabel-firstboot`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/issabel-firstboot), and reloads `amportal`. The first-boot helper now also repairs the `call_center` schema if the `agent` table is missing, using the bundled `issabel-callcenter` SQL dump shipped in the image.
 
 ## Backup and restore contract
 
