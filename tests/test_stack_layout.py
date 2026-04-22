@@ -10,6 +10,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class IssabelStackLayoutTests(unittest.TestCase):
+    def render_compose_config(self, compose_file: str, env_overrides=None) -> dict:
+        env = os.environ.copy()
+        if env_overrides:
+            env.update(env_overrides)
+
+        proc = subprocess.run(
+            ["docker", "compose", "-f", str(ROOT / compose_file), "config", "--format", "json"],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return json.loads(proc.stdout)
+
     def run_sync_workspace(self, workspace_root: Path, web_root: Path, modules_target: Path, state_root: Path) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
@@ -29,20 +44,11 @@ class IssabelStackLayoutTests(unittest.TestCase):
             text=True,
         )
 
-    def test_compose_declares_expected_runtime_contract(self) -> None:
+    def test_bridge_compose_declares_lab_runtime_contract(self) -> None:
         compose_path = ROOT / "docker-compose.yml"
         self.assertTrue(compose_path.exists(), "docker-compose.yml must exist")
         compose_text = compose_path.read_text()
-
-        proc = subprocess.run(
-            ["docker", "compose", "-f", str(compose_path), "config", "--format", "json"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-
-        config = json.loads(proc.stdout)
+        config = self.render_compose_config("docker-compose.yml")
         self.assertIn("services", config)
         self.assertIn("issabel", config["services"])
 
@@ -54,7 +60,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertEqual(service["build"]["args"]["ASTERISK_PACKAGE"], "asterisk11")
         self.assertEqual(
             service["build"]["args"]["OPTIONAL_PACKAGES"],
-            "issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-reports",
+            "issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-fax issabel-reports",
         )
         self.assertEqual(service["environment"]["ISABEL_BOOTSTRAP_MARKER"], "/var/lib/issabel/.bootstrapped")
         self.assertEqual(service["environment"]["WORKSPACE_ROOT"], "/workspace")
@@ -76,6 +82,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("WORKSPACE_BIND_SOURCE:-.}", compose_text)
         self.assertIn("ASTERISK_PACKAGE: ${ISSABEL_INSTALL_ASTERISK_PACKAGE:-asterisk18}", compose_text)
         self.assertIn("OPTIONAL_PACKAGES: ${ISSABEL_INSTALL_OPTIONAL_PACKAGES:-}", compose_text)
+        self.assertNotIn("network_mode: host", compose_text)
         self.assertIn("/workspace", service["volumes"][0]["target"])
         self.assertIn("/sys/fs/cgroup", service["volumes"][1]["target"])
         self.assertEqual(service["healthcheck"]["test"][0], "CMD-SHELL")
@@ -105,6 +112,34 @@ class IssabelStackLayoutTests(unittest.TestCase):
         ]:
             self.assertIn(volume_name, volumes)
 
+    def test_hostnet_compose_declares_production_sip_contract(self) -> None:
+        compose_path = ROOT / "docker-compose.hostnet.yml"
+        self.assertTrue(compose_path.exists(), "docker-compose.hostnet.yml must exist")
+        compose_text = compose_path.read_text()
+        config = self.render_compose_config("docker-compose.hostnet.yml")
+        self.assertIn("services", config)
+        self.assertIn("issabel", config["services"])
+
+        service = config["services"]["issabel"]
+        self.assertTrue(service["privileged"])
+        self.assertEqual(service["network_mode"], "host")
+        self.assertNotIn("ports", service)
+        self.assertEqual(service["container_name"], "issabel-dev")
+        self.assertEqual(service["hostname"], "issabel.local")
+        self.assertEqual(service["restart"], "unless-stopped")
+        self.assertEqual(service["build"]["dockerfile"], "docker/issabel/Dockerfile")
+        self.assertEqual(service["build"]["args"]["ASTERISK_PACKAGE"], "asterisk11")
+        self.assertEqual(
+            service["build"]["args"]["OPTIONAL_PACKAGES"],
+            "issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-fax issabel-reports",
+        )
+        self.assertEqual(service["environment"]["ISSABEL_SIP_PORT"], "5060")
+        self.assertEqual(service["environment"]["ISSABEL_RTP_START"], "10000")
+        self.assertEqual(service["environment"]["ISSABEL_RTP_END"], "10100")
+        self.assertIn("network_mode: host", compose_text)
+        self.assertNotIn("ports:", compose_text)
+        self.assertEqual(service["tmpfs"], ["/run", "/run/lock", "/tmp"])
+
     def test_dockerfile_and_scripts_exist_with_expected_contract(self) -> None:
         dockerfile = ROOT / "docker" / "issabel" / "Dockerfile"
         prepare_script = ROOT / "scripts" / "prepare-iso-root.sh"
@@ -114,8 +149,11 @@ class IssabelStackLayoutTests(unittest.TestCase):
         diagnose_script = ROOT / "scripts" / "diagnose.sh"
         build_script = ROOT / "scripts" / "build-image.sh"
         up_script = ROOT / "scripts" / "up.sh"
+        compose_helper = ROOT / "scripts" / "compose-mode.sh"
+        helper_wrapper = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "bin" / "issabel-helper"
         bootstrap_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "bootstrap-issabel"
         firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
+        post_restore_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-issabelbr-post-restore"
         install_profile_example = ROOT / ".issabel-install.conf.example"
         env_file = ROOT / ".env"
         env_example_file = ROOT / ".env.example"
@@ -133,8 +171,11 @@ class IssabelStackLayoutTests(unittest.TestCase):
             diagnose_script,
             build_script,
             up_script,
+            compose_helper,
+            helper_wrapper,
             bootstrap_script,
             firstboot_script,
+            post_restore_script,
             install_profile_example,
             env_file,
             env_example_file,
@@ -149,8 +190,36 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("FROM quay.io/centos/centos:7", dockerfile_text)
         self.assertIn("ARG ASTERISK_PACKAGE=asterisk18", dockerfile_text)
         self.assertIn("ARG OPTIONAL_PACKAGES=\"\"", dockerfile_text)
+        self.assertIn("ARG INSTALL_ISSABELBR_POST_PATCH=1", dockerfile_text)
         self.assertIn("COPY .build/issabel-root /opt/issabel-root", dockerfile_text)
+        self.assertIn("/usr/local/bin/apply-issabelbr-build-assets", dockerfile_text)
+        self.assertIn("/usr/local/bin/apply-issabelbr-post-restore", dockerfile_text)
+        self.assertIn("/usr/bin/issabel-helper", dockerfile_text)
         self.assertIn("ENTRYPOINT [\"/usr/local/bin/bootstrap-issabel\"]", dockerfile_text)
+
+        helper_wrapper_text = helper_wrapper.read_text()
+        self.assertIn('if [ "$1" = "backupengine" ]; then', helper_wrapper_text)
+        self.assertIn('if [ "$arg" = "--restore" ]; then', helper_wrapper_text)
+        self.assertIn('/usr/local/bin/apply-issabelbr-post-restore', helper_wrapper_text)
+
+        post_restore_text = post_restore_script.read_text()
+        self.assertIn('ISSABELBR_RUNTIME_ASSETS_DIR', post_restore_text)
+        self.assertIn('ISSABEL_INSTALL_ASTERISK_PACKAGE', post_restore_text)
+        self.assertIn('rpm -q asterisk11', post_restore_text)
+        self.assertIn('apply_static_assets', post_restore_text)
+        self.assertIn('apply_file_reconciliations', post_restore_text)
+        self.assertIn('/usr/local/bin/issabel-firstboot', post_restore_text)
+        self.assertIn('/usr/sbin/amportal reload', post_restore_text)
+
+        firstboot_text = firstboot_script.read_text()
+        self.assertIn('reconcile_callcenter_peerstatus_logoff()', firstboot_text)
+        self.assertIn('/opt/issabel/dialer/AMIEventProcess.class.php', firstboot_text)
+        self.assertIn("strpos($a->channel, 'Agent/') === 0", firstboot_text)
+        self.assertIn('conservando sesion legacy', firstboot_text)
+        self.assertIn('if [ "$address" = "SEU_IP_PUBLICO_OU_DNS" ] || [ "$address" = "YOUR_PUBLIC_IP_OR_DNS" ]; then', firstboot_text)
+        self.assertIn("localnets=\"$(printf '%s\\n' \"$localnets\" | normalize_network_lines)\"", firstboot_text)
+        self.assertIn('$0 !~ / dev tailscale[[:alnum:]_.-]*/', firstboot_text)
+        self.assertIn("$2 !~ /^tailscale[[:alnum:]_.-]*/", firstboot_text)
 
         prepare_text = prepare_script.read_text()
         self.assertIn("issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso", prepare_text)
@@ -165,15 +234,24 @@ class IssabelStackLayoutTests(unittest.TestCase):
         build_text = build_script.read_text()
         self.assertIn("resolve-install-profile.py", build_text)
         self.assertIn(".build/install.env", build_text)
+        self.assertIn("issabel_compose_init", build_text)
 
         up_text = up_script.read_text()
         self.assertIn("resolve-install-profile.py", up_text)
         self.assertIn(".build/install.env", up_text)
+        self.assertIn("issabel_compose_init", up_text)
 
         sync_text = sync_script.read_text()
         self.assertIn("/workspace", sync_text)
         self.assertIn("/var/www/html/modules", sync_text)
         self.assertIn("/usr/local/bin/sync-workspace", sync_text)
+        self.assertIn("issabel_compose_init", sync_text)
+
+        compose_helper_text = compose_helper.read_text()
+        self.assertIn("ISSABEL_COMPOSE_MODE", compose_helper_text)
+        self.assertIn("docker-compose.hostnet.yml", compose_helper_text)
+        self.assertIn("unsupported compose mode", compose_helper_text)
+        self.assertIn("read_env_default", compose_helper_text)
 
         rootfs_sync_text = rootfs_sync_script.read_text()
         self.assertIn("STATE_ROOT", rootfs_sync_text)
@@ -197,6 +275,12 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("/tftpboot", bootstrap_text)
         self.assertIn("start_callcenter", bootstrap_text)
         self.assertIn("issabeldialer", bootstrap_text)
+        self.assertIn('exec > >(tee -a "$BOOTSTRAP_LOG") 2>&1', bootstrap_text)
+        self.assertIn("  /usr/local/bin/issabel-firstboot\n", bootstrap_text)
+        self.assertIn("refresh_pbx_runtime", bootstrap_text)
+        self.assertIn("/var/lib/asterisk/bin/retrieve_conf", bootstrap_text)
+        self.assertIn("amportal a r", bootstrap_text)
+        self.assertNotIn("/usr/local/bin/issabel-firstboot || true", bootstrap_text)
 
         firstboot_text = firstboot_script.read_text()
         self.assertIn("CREATE DATABASE IF NOT EXISTS asterisk;", firstboot_text)
@@ -213,30 +297,50 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("/etc/issabel.conf", firstboot_text)
         self.assertIn("mysqlrootpwd", firstboot_text)
         self.assertIn("amiadminpwd", firstboot_text)
+        self.assertIn("find_callcenter_schema", firstboot_text)
+        self.assertIn("seed_callcenter_schema", firstboot_text)
+        self.assertIn("SHOW TABLES LIKE 'agent'", firstboot_text)
+        self.assertIn("firstboot_call_center.sql", firstboot_text)
         self.assertIn("ISSABEL_MYSQL_ROOT_PASSWORD", firstboot_text)
         self.assertIn("/opt/issabel/dialer/dialerd.conf", firstboot_text)
         self.assertIn("reconcile_http_redirect_port", firstboot_text)
         self.assertIn("reconcile_manager_secret", firstboot_text)
+        self.assertIn("reconcile_manager_general_settings", firstboot_text)
+        self.assertIn("enabled = yes", firstboot_text)
         self.assertIn("reconcile_sip_bridge_settings", firstboot_text)
-        self.assertIn("ensure_runtime_services", firstboot_text)
-        self.assertIn("safe_asterisk -U asterisk -G asterisk", firstboot_text)
-        self.assertIn("/usr/sbin/httpd -DFOREGROUND", firstboot_text)
         self.assertIn("ISSABEL_SIP_BIND_ADDRESS", firstboot_text)
         self.assertIn("ISSABEL_SIP_EXTERNAL_ADDRESS", firstboot_text)
         self.assertIn("ISSABEL_RTP_START", firstboot_text)
         self.assertIn("ISSABEL_RTP_END", firstboot_text)
         self.assertIn("/etc/asterisk/sip_general_custom.conf", firstboot_text)
         self.assertIn("/etc/asterisk/rtp_custom.conf", firstboot_text)
+        self.assertIn("/etc/asterisk/queues.conf", firstboot_text)
+        self.assertIn("#include queues_additional.conf", firstboot_text)
         self.assertIn("/etc/httpd/conf.d/issabel.conf", firstboot_text)
         self.assertIn("/etc/asterisk/manager.conf", firstboot_text)
-        self.assertIn('python3 - "$file_path" "$HTTPS_REDIRECT_PORT"', firstboot_text)
-        self.assertIn('RewriteCond %{{HTTP_HOST}} ^([^:]+)(?::\\\\d+)?$', firstboot_text)
-        self.assertIn('https://%1:{https_port}%{{REQUEST_URI}}', firstboot_text)
+        self.assertIn("channelvars = DIALERID,DIALERVAR", firstboot_text)
+        self.assertIn('local read_permissions="system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate"', firstboot_text)
+        self.assertIn('local write_permissions="system,call,log,verbose,command,agent,user,config,command,dtmf,reporting,cdr,dialplan,originate"', firstboot_text)
+        self.assertIn('python - "$file_path" "$HTTPS_REDIRECT_PORT"', firstboot_text)
+        self.assertIn('RewriteCond %%{HTTP_HOST} ^([^:]+)(?::\\\\d+)?$', firstboot_text)
+        self.assertIn('https://%%1:%s%%{REQUEST_URI}', firstboot_text)
+        self.assertNotIn("yum ", firstboot_text)
+        self.assertNotIn("wget ", firstboot_text)
+        self.assertNotIn("apply_issabelbr_post_patch", firstboot_text)
+        self.assertNotIn("configure_el7_repositories", firstboot_text)
+
+        build_assets_text = (ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-issabelbr-build-assets").read_text()
+        self.assertIn("ISSABELBR_RUNTIME_ASSETS_DIR", build_assets_text)
+        self.assertIn("ISSABEL_INSTALL_ASTERISK_PACKAGE", build_assets_text)
+        self.assertIn("rpm -q asterisk11", build_assets_text)
+        self.assertIn("cache_runtime_assets", build_assets_text)
+        self.assertIn("/opt/issabelbr-runtime-assets", build_assets_text)
 
         env_text = env_file.read_text()
         env_example_text = env_example_file.read_text()
         self.assertIn("ISSABEL_WEB_ADMIN_USER=admin", env_text)
         self.assertIn("ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123", env_text)
+        self.assertIn("ISSABEL_COMPOSE_MODE=bridge", env_text)
         self.assertIn("ISSABEL_HTTP_PORT=8088", env_text)
         self.assertIn("ISSABEL_HTTPS_PORT=8443", env_text)
         self.assertIn("ISSABEL_CONTAINER_NAME=issabel-dev", env_text)
@@ -244,13 +348,14 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("WORKSPACE_BIND_SOURCE=.", env_text)
         self.assertIn("ISSABEL_INSTALL_ASTERISK_PACKAGE=asterisk11", env_text)
         self.assertIn(
-            "ISSABEL_INSTALL_OPTIONAL_PACKAGES='issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-reports'",
+            "ISSABEL_INSTALL_OPTIONAL_PACKAGES='issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-fax issabel-reports'",
             env_text,
         )
         self.assertIn("ISSABEL_INSTALL_MODULE_PROFILE=full", env_text)
         self.assertIn("ISSABEL_INSTALL_ISSABELBR_POST_PATCH=1", env_text)
         self.assertIn("ISSABEL_WEB_ADMIN_USER=admin", env_example_text)
         self.assertIn("ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123", env_example_text)
+        self.assertIn("ISSABEL_COMPOSE_MODE=bridge", env_example_text)
         self.assertIn("ISSABEL_HTTP_PORT=8088", env_example_text)
         self.assertIn("ISSABEL_HTTPS_PORT=8443", env_example_text)
         self.assertIn("ISSABEL_CONTAINER_NAME=issabel-dev", env_example_text)
@@ -271,9 +376,8 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("conflicting overlays", overlays_readme_text)
 
     def test_compose_config_respects_runtime_env_overrides(self) -> None:
-        compose_path = ROOT / "docker-compose.yml"
-        env = os.environ.copy()
-        env.update(
+        config = self.render_compose_config(
+            "docker-compose.yml",
             {
                 "ISSABEL_HTTP_PORT": "9080",
                 "ISSABEL_HTTPS_PORT": "9443",
@@ -283,26 +387,47 @@ class IssabelStackLayoutTests(unittest.TestCase):
                 "COMPOSE_PROJECT_NAME": "issabel-alt",
                 "ISSABEL_INSTALL_ASTERISK_PACKAGE": "asterisk11",
                 "ISSABEL_INSTALL_OPTIONAL_PACKAGES": "issabel-callcenter issabel-reports",
-            }
+            },
         )
-
-        proc = subprocess.run(
-            ["docker", "compose", "-f", str(compose_path), "config", "--format", "json"],
-            cwd=ROOT,
-            env=env,
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-
-        config = json.loads(proc.stdout)
         service = config["services"]["issabel"]
         self.assertEqual(service["container_name"], "issabel-custom")
         self.assertEqual(service["hostname"], "pbx.local")
         self.assertEqual(service["build"]["args"]["ASTERISK_PACKAGE"], "asterisk11")
         self.assertEqual(service["build"]["args"]["OPTIONAL_PACKAGES"], "issabel-callcenter issabel-reports")
+        self.assertEqual(service["build"]["args"]["INSTALL_ISSABELBR_POST_PATCH"], "1")
         self.assertEqual(service["ports"][0]["published"], "9080")
         self.assertEqual(service["ports"][1]["published"], "9443")
+        self.assertEqual(service["volumes"][0]["source"], "/srv/workspace")
+
+    def test_hostnet_compose_respects_runtime_env_overrides_without_published_ports(self) -> None:
+        config = self.render_compose_config(
+            "docker-compose.hostnet.yml",
+            {
+                "ISSABEL_HTTP_PORT": "9080",
+                "ISSABEL_HTTPS_PORT": "9443",
+                "ISSABEL_SIP_PORT": "15060",
+                "ISSABEL_RTP_START": "12000",
+                "ISSABEL_RTP_END": "12100",
+                "ISSABEL_CONTAINER_NAME": "issabel-custom",
+                "ISSABEL_HOSTNAME": "pbx.local",
+                "WORKSPACE_BIND_SOURCE": "/srv/workspace",
+                "COMPOSE_PROJECT_NAME": "issabel-alt",
+                "ISSABEL_INSTALL_ASTERISK_PACKAGE": "asterisk11",
+                "ISSABEL_INSTALL_OPTIONAL_PACKAGES": "issabel-callcenter issabel-reports",
+            },
+        )
+
+        service = config["services"]["issabel"]
+        self.assertEqual(service["container_name"], "issabel-custom")
+        self.assertEqual(service["hostname"], "pbx.local")
+        self.assertEqual(service["network_mode"], "host")
+        self.assertEqual(service["build"]["args"]["ASTERISK_PACKAGE"], "asterisk11")
+        self.assertEqual(service["build"]["args"]["OPTIONAL_PACKAGES"], "issabel-callcenter issabel-reports")
+        self.assertEqual(service["environment"]["ISSABEL_HTTPS_PORT"], "9443")
+        self.assertEqual(service["environment"]["ISSABEL_SIP_PORT"], "15060")
+        self.assertEqual(service["environment"]["ISSABEL_RTP_START"], "12000")
+        self.assertEqual(service["environment"]["ISSABEL_RTP_END"], "12100")
+        self.assertNotIn("ports", service)
         self.assertEqual(service["volumes"][0]["source"], "/srv/workspace")
 
     def test_firstboot_seeds_callcenter_and_pbx_database_contract(self) -> None:
@@ -315,25 +440,45 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("GRANT ALL PRIVILEGES ON call_center.* TO '${CALLCENTER_DB_USER}'@'localhost' IDENTIFIED BY '${CALLCENTER_DB_PASSWORD}';", firstboot_text)
         self.assertIn("ensure_config_value \"/opt/issabel/dialer/dialerd.conf\" \"dbuser\" \"$CALLCENTER_DB_USER\"", firstboot_text)
         self.assertIn("ensure_php_conf_value \"/etc/issabelpbx.conf\" \"AMPDBNAME\" \"asterisk\"", firstboot_text)
-        self.assertIn("read_manager_credentials", firstboot_text)
         self.assertIn("reconcile_ami_credentials", firstboot_text)
         self.assertIn("reconcile_manager_secret", firstboot_text)
+        self.assertIn("local read_permissions=", firstboot_text)
+        self.assertIn("local write_permissions=", firstboot_text)
+        self.assertIn("normalize_agents_conf", firstboot_text)
+        self.assertIn("/etc/asterisk/agents.conf", firstboot_text)
         self.assertIn("INSERT INTO call_center.valor_config (config_key, config_value)", firstboot_text)
         self.assertIn("'asterisk.astuser'", firstboot_text)
         self.assertIn("'asterisk.astpass'", firstboot_text)
         self.assertNotIn("/usr/local/bin/sync-workspace --once", firstboot_text)
+        self.assertNotIn("ensure_runtime_services", firstboot_text)
+        self.assertNotIn("apply_issabelbr_post_patch", firstboot_text)
 
-    def test_firstboot_post_patch_cleanup_disarms_return_trap(self) -> None:
-        firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
-        firstboot_text = firstboot_script.read_text()
+    def test_build_time_issabelbr_helper_carries_runtime_heavy_work(self) -> None:
+        helper_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-issabelbr-build-assets"
+        helper_text = helper_script.read_text()
 
-        self.assertIn("trap cleanup EXIT", firstboot_text)
-        self.assertNotIn("trap cleanup RETURN", firstboot_text)
+        self.assertIn("INSTALL_ISSABELBR_POST_PATCH", helper_text)
+        self.assertIn("configure_el7_repositories", helper_text)
+        self.assertIn("git clone https://github.com/ibinetwork/IssabelBR.git", helper_text)
+        self.assertIn("yum install", helper_text)
+        self.assertIn("asterisk-codec-g729", helper_text)
+        self.assertIn("sngrep", helper_text)
+        self.assertIn('${ISSABELBR_REPO_DIR}/web/', helper_text)
+        self.assertIn('${ISSABELBR_REPO_DIR}/audio/', helper_text)
+        self.assertIn('${ISSABELBR_REPO_DIR}/etc/asterisk/', helper_text)
+        self.assertIn('${ISSABELBR_REPO_DIR}/web2/', helper_text)
 
     def test_gitignore_and_docs_cover_local_module_contract(self) -> None:
         gitignore_text = (ROOT / ".gitignore").read_text()
         self.assertIn("modules/", gitignore_text)
         self.assertIn("overlays/", gitignore_text)
+
+        readme_text = (ROOT / "README.md").read_text()
+        self.assertIn("ISSABEL_COMPOSE_MODE", readme_text)
+        self.assertIn("hostnet", readme_text)
+        self.assertIn("bridge", readme_text)
+        self.assertIn("Janus", readme_text)
+        self.assertIn("lab", readme_text)
 
         operations_text = (ROOT / "docs" / "operations.md").read_text()
         self.assertIn("module contract", operations_text)
@@ -343,6 +488,27 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("hooks/apply.sh", operations_text)
         self.assertIn("hooks/revert.sh", operations_text)
         self.assertIn("URL direta", operations_text)
+        self.assertIn("ISSABEL_COMPOSE_MODE", operations_text)
+        self.assertIn("docker-compose.hostnet.yml", operations_text)
+        self.assertIn("Janus", operations_text)
+        self.assertIn("lab-only mode", operations_text)
+
+        call_center_login_text = (ROOT / "docs" / "call-center-agent-login.md").read_text()
+        self.assertIn("ISSABEL_COMPOSE_MODE=hostnet", call_center_login_text)
+        self.assertIn("Janus", call_center_login_text)
+        self.assertIn("lab mode", call_center_login_text)
+
+    def test_telephony_dashboard_apply_hook_registers_menu_idempotently(self) -> None:
+        apply_hook = (ROOT / "modules" / "telephony_dashboard" / "hooks" / "apply.sh").read_text()
+
+        self.assertIn("sqlite3 /var/www/db/menu.db", apply_hook)
+        self.assertIn("DELETE FROM menu WHERE id='telephony_dashboard'", apply_hook)
+        self.assertIn("WHERE NOT EXISTS", apply_hook)
+        self.assertIn("telephony_dashboard", apply_hook)
+        self.assertIn("sqlite3 /var/www/db/acl.db", apply_hook)
+        self.assertIn("INSERT INTO acl_resource", apply_hook)
+        self.assertIn("INSERT INTO acl_group_permission", apply_hook)
+        self.assertIn("ln -s", apply_hook)
 
     def test_sync_workspace_applies_and_reverts_web_root_overlay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
@@ -383,6 +549,92 @@ class IssabelStackLayoutTests(unittest.TestCase):
             self.assertEqual((web_root / "index.php").read_text(), "core-index\n")
             self.assertFalse((web_root / "themes" / "custom.css").exists())
             self.assertFalse((state_root / "overlays" / "theme-a").exists())
+
+    def test_sync_workspace_publishes_module_using_canonical_name_from_menu_xml(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+            module_root = workspace_root / "modules" / "callcenter-bridge_issabel4"
+            web_payload_root = module_root / "web"
+
+            web_payload_root.mkdir(parents=True)
+            web_root.mkdir(parents=True)
+            modules_target.mkdir(parents=True)
+            state_root.mkdir(parents=True)
+
+            (web_payload_root / "index.php").write_text("<?php echo 'ok';\n")
+            (web_payload_root / "menu.xml").write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<menu>
+    <menucache>
+        <item id="callcenter_bridge">
+            <description>Callcenter Bridge</description>
+            <type>module</type>
+            <id_parent>pbxconfig</id_parent>
+            <link></link>
+            <order_no>98</order_no>
+        </item>
+    </menucache>
+</menu>
+"""
+            )
+
+            result = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((modules_target / "callcenter_bridge" / "index.php").exists())
+            self.assertTrue((modules_target / "callcenter_bridge" / "menu.xml").exists())
+            self.assertFalse((modules_target / "callcenter-bridge_issabel4").exists())
+
+    def test_sync_workspace_reverts_removed_module_using_recorded_canonical_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+            module_root = workspace_root / "modules" / "callcenter-bridge_issabel4"
+            web_payload_root = module_root / "web"
+
+            web_payload_root.mkdir(parents=True)
+            web_root.mkdir(parents=True)
+            modules_target.mkdir(parents=True)
+            state_root.mkdir(parents=True)
+
+            (web_payload_root / "index.php").write_text("<?php echo 'ok';\n")
+            (web_payload_root / "menu.xml").write_text(
+                """<?xml version="1.0" encoding="UTF-8"?>
+<menu>
+    <menucache>
+        <item id="callcenter_bridge">
+            <description>Callcenter Bridge</description>
+            <type>module</type>
+            <id_parent>pbxconfig</id_parent>
+            <link></link>
+            <order_no>98</order_no>
+        </item>
+    </menucache>
+</menu>
+"""
+            )
+
+            first_run = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(first_run.returncode, 0, first_run.stderr)
+            self.assertTrue((modules_target / "callcenter_bridge" / "index.php").exists())
+
+            for path in sorted(module_root.rglob("*"), reverse=True):
+                if path.is_file():
+                    path.unlink()
+                else:
+                    path.rmdir()
+            module_root.rmdir()
+
+            second_run = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+            self.assertEqual(second_run.returncode, 0, second_run.stderr)
+            self.assertFalse((modules_target / "callcenter_bridge").exists())
+            self.assertFalse((state_root / "modules" / "callcenter-bridge_issabel4").exists())
 
     def test_sync_workspace_blocks_conflicting_web_root_overlays(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

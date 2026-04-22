@@ -1,5 +1,6 @@
-# Default bridge-mode runtime for local development.
-# Use docker-compose.hostnet.yml when you need direct host networking for real SIP/RTP traffic.
+# Explicit host-network runtime for real SIP/RTP testing.
+# Select this file via ISSABEL_COMPOSE_MODE=hostnet or the scripts' --hostnet flag.
+# It bypasses Docker bridge/NAT and binds Issabel directly on the host network.
 services:
   issabel:
     container_name: ${ISSABEL_CONTAINER_NAME:-issabel-dev}
@@ -8,6 +9,7 @@ services:
     restart: unless-stopped
     cgroup: host
     stop_signal: SIGTERM
+    network_mode: host
     build:
       context: .
       dockerfile: docker/issabel/Dockerfile
@@ -34,13 +36,6 @@ services:
       - /run
       - /run/lock
       - /tmp
-    # Bridge mode publishes ports through Docker NAT. Keep this as the default development path.
-    # For direct SIP/RTP on the host network, select docker-compose.hostnet.yml explicitly.
-    ports:
-      - "${ISSABEL_HTTP_PORT:-8088}:80"
-      - "${ISSABEL_HTTPS_PORT:-8443}:443"
-      - "${ISSABEL_SIP_PORT:-5060}:5060/udp"
-      - "${ISSABEL_RTP_START:-10000}-${ISSABEL_RTP_END:-10100}:${ISSABEL_RTP_START:-10000}-${ISSABEL_RTP_END:-10100}/udp"
     volumes:
       - type: bind
         source: ${WORKSPACE_BIND_SOURCE:-.}

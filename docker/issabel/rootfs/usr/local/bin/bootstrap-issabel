@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MARKER="${ISABEL_BOOTSTRAP_MARKER:-/var/lib/issabel/.bootstrapped}"
+BOOTSTRAP_LOG="${ISSABEL_BOOTSTRAP_LOG:-/var/log/issabel-bootstrap.log}"
 MARIADB_PID=""
 HTTPD_PID=""
 ASTERISK_PID=""
@@ -111,6 +112,19 @@ start_asterisk() {
   wait_for_asterisk
 }
 
+refresh_pbx_runtime() {
+  if [ -x /var/lib/asterisk/bin/retrieve_conf ]; then
+    su - asterisk -s /bin/bash -c /var/lib/asterisk/bin/retrieve_conf
+  fi
+
+  if command -v amportal >/dev/null 2>&1; then
+    amportal a r
+  fi
+
+  asterisk -rx "sip reload" >/dev/null 2>&1 || true
+  asterisk -rx "module reload app_queue.so" >/dev/null 2>&1 || true
+}
+
 callcenter_is_installed() {
   [ -x /etc/rc.d/init.d/issabeldialer ] && [ -x /opt/issabel/dialer/dialerd ]
 }
@@ -166,15 +180,17 @@ stop_services() {
 
 main() {
   trap stop_services EXIT INT TERM
+  exec > >(tee -a "$BOOTSTRAP_LOG") 2>&1
 
   prepare_filesystem
   prepare_database
 
   # systemctl enable mariadb httpd asterisk sshd issabel-firstboot
   start_mariadb
-  /usr/local/bin/issabel-firstboot || true
+  /usr/local/bin/issabel-firstboot
   start_httpd
   start_asterisk
+  refresh_pbx_runtime
   start_callcenter
 
   monitor_services

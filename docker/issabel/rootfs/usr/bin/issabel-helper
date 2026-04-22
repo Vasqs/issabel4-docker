@@ -1,0 +1,30 @@
+#!/bin/sh
+if [ "$TERM" = "dumb" ] ; then
+    TERM="xterm"
+    export TERM
+fi
+
+IS_RESTORE=0
+if [ "$1" = "backupengine" ]; then
+    shift
+    for arg in "$@"; do
+        if [ "$arg" = "--restore" ]; then
+            IS_RESTORE=1
+            break
+        fi
+    done
+    set -- backupengine "$@"
+fi
+
+/usr/sbin/close-on-exec.pl sudo -u root /usr/sbin/issabel-helper "$@"
+STATUS=$?
+
+if [ "$STATUS" -eq 0 ] && [ "$IS_RESTORE" -eq 1 ]; then
+    /usr/sbin/close-on-exec.pl sudo -u root /usr/local/bin/apply-issabelbr-post-restore
+    POST_STATUS=$?
+    if [ "$POST_STATUS" -ne 0 ]; then
+        exit "$POST_STATUS"
+    fi
+fi
+
+exit "$STATUS"

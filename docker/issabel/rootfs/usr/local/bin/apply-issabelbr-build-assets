@@ -1,0 +1,121 @@
+#!/bin/bash
+set -euo pipefail
+
+INSTALL_ISSABELBR_POST_PATCH="${INSTALL_ISSABELBR_POST_PATCH:-1}"
+ASTERISK_PACKAGE="${ASTERISK_PACKAGE:-${ISSABEL_INSTALL_ASTERISK_PACKAGE:-}}"
+ISSABELBR_REPO_DIR="${ISSABELBR_REPO_DIR:-/usr/src/IssabelBR}"
+EL7_REPO_CONFIGURATOR="${EL7_REPO_CONFIGURATOR:-/usr/local/bin/configure-el7-repositories}"
+ISSABELBR_RUNTIME_ASSETS_DIR="${ISSABELBR_RUNTIME_ASSETS_DIR:-/opt/issabelbr-runtime-assets}"
+SNGREP_REPO_FILE="/etc/yum.repos.d/irontec.repo"
+
+patch_is_enabled() {
+  case "${INSTALL_ISSABELBR_POST_PATCH,,}" in
+    1|true|yes|y|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+patch_is_supported() {
+  if [ -z "$ASTERISK_PACKAGE" ]; then
+    if rpm -q asterisk11 >/dev/null 2>&1; then
+      ASTERISK_PACKAGE="asterisk11"
+    elif rpm -q asterisk13 >/dev/null 2>&1; then
+      ASTERISK_PACKAGE="asterisk13"
+    fi
+  fi
+
+  case "$ASTERISK_PACKAGE" in
+    asterisk11|asterisk13)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+configure_el7_repositories() {
+  "$EL7_REPO_CONFIGURATOR"
+}
+
+install_sngrep_repository() {
+  cat >"$SNGREP_REPO_FILE" <<'EOF'
+[copr:copr.fedorainfracloud.org:irontec:sngrep]
+name=Copr repo for sngrep owned by irontec
+baseurl=https://download.copr.fedorainfracloud.org/results/irontec/sngrep/epel-7-$basearch/
+type=rpm-md
+skip_if_unavailable=True
+gpgcheck=1
+gpgkey=https://download.copr.fedorainfracloud.org/results/irontec/sngrep/pubkey.gpg
+repo_gpgcheck=0
+enabled=1
+enabled_metadata=1
+EOF
+  rpm --import https://download.copr.fedorainfracloud.org/results/irontec/sngrep/pubkey.gpg
+}
+
+install_runtime_tools() {
+  yum install -y epel-release git mtr vim mlocate nmap tcpdump mc nano lynx minicom \
+    screen htop subversion deltarpm socat lame dos2unix yum-utils yum-updateonboot \
+    p7zip p7zip-plugins cowsay
+
+  install_sngrep_repository
+  yum install -y issabel-callcenter-4.0.0-4 asterisk-codec-g729 sngrep
+}
+
+clone_issabelbr_repo() {
+  rm -rf "$ISSABELBR_REPO_DIR"
+  git clone https://github.com/ibinetwork/IssabelBR.git "$ISSABELBR_REPO_DIR"
+}
+
+apply_static_assets() {
+  rsync -a "${ISSABELBR_REPO_DIR}/repo/" /etc/yum.repos.d/ || true
+  rsync -a "${ISSABELBR_REPO_DIR}/web/" /var/www/html/
+  rsync -a -u "${ISSABELBR_REPO_DIR}/audio/" /var/lib/asterisk/sounds/
+  rsync -a "${ISSABELBR_REPO_DIR}/etc/asterisk/" /etc/asterisk/
+  rsync -a "${ISSABELBR_REPO_DIR}/web2/" /var/www/html/modules/
+}
+
+cache_runtime_assets() {
+  rm -rf "$ISSABELBR_RUNTIME_ASSETS_DIR"
+  mkdir -p "$ISSABELBR_RUNTIME_ASSETS_DIR"
+  rsync -a "${ISSABELBR_REPO_DIR}/repo/" "$ISSABELBR_RUNTIME_ASSETS_DIR/repo/" || true
+  rsync -a "${ISSABELBR_REPO_DIR}/web/" "$ISSABELBR_RUNTIME_ASSETS_DIR/web/"
+  rsync -a "${ISSABELBR_REPO_DIR}/audio/" "$ISSABELBR_RUNTIME_ASSETS_DIR/audio/"
+  rsync -a "${ISSABELBR_REPO_DIR}/etc/asterisk/" "$ISSABELBR_RUNTIME_ASSETS_DIR/etc-asterisk/"
+  rsync -a "${ISSABELBR_REPO_DIR}/web2/" "$ISSABELBR_RUNTIME_ASSETS_DIR/web2/"
+}
+
+apply_file_reconciliations() {
+  sed -i '/extensions_tratamento_hangupcause.conf/d' /etc/asterisk/extensions_override_issabel.conf /etc/asterisk/extensions_override_issabelpbx.conf || true
+  echo "#include /etc/asterisk/extensions_tratamento_hangupcause.conf" >> /etc/asterisk/extensions_override_issabelpbx.conf
+  sed -i -r 's/666699/33697B/' /var/www/html/modules/pbxadmin/themes/default/css/mainstyle.css /var/www/html/admin/assets/css/mainstyle.css || true
+  sed -i -r 's/;musiconhold=default/musiconhold=none/' /etc/asterisk/agents.conf || true
+  chown asterisk:asterisk /etc/asterisk/extensions_tratamento_hangupcause.conf || true
+  chown -R asterisk:asterisk /var/lib/asterisk/agi-bin || true
+}
+
+main() {
+  if ! patch_is_enabled; then
+    echo "Skipping IssabelBR build assets because INSTALL_ISSABELBR_POST_PATCH=${INSTALL_ISSABELBR_POST_PATCH}"
+    exit 0
+  fi
+
+  if ! patch_is_supported; then
+    echo "Skipping IssabelBR build assets for unsupported package ${ASTERISK_PACKAGE}"
+    exit 0
+  fi
+
+  configure_el7_repositories
+  install_runtime_tools
+  clone_issabelbr_repo
+  cache_runtime_assets
+  apply_static_assets
+  apply_file_reconciliations
+}
+
+main "$@"
