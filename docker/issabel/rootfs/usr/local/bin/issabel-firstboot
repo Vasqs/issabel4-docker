@@ -249,22 +249,58 @@ normalize_network_lines() {
   tr ', ' '\n\n' | sed '/^$/d'
 }
 
+detect_public_ipv4() {
+  local ip=""
+
+  if command -v curl >/dev/null 2>&1; then
+    ip="$(curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null || true)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    ip="$(python - <<'PY' 2>/dev/null || true
+import sys
+import urllib.request
+
+try:
+    with urllib.request.urlopen("https://api.ipify.org", timeout=3) as resp:
+        sys.stdout.write(resp.read().decode("utf-8").strip())
+except Exception:
+    pass
+PY
+)"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf '%s\n' "$ip"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
 detect_sip_localnets() {
   local discovered
 
-  discovered="$(ip -4 -o route show scope link 2>/dev/null | awk '{print $1}' | sed '/^default$/d' || true)"
+  discovered="$(ip -4 -o route show scope link 2>/dev/null | awk '$1 != "default" && $0 !~ / dev tailscale[[:alnum:]_.-]*/ {print $1}' || true)"
   if [ -n "$discovered" ]; then
     printf '%s\n' "$discovered" | normalize_network_lines
     return 0
   fi
 
-  ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | normalize_network_lines || true
+  ip -4 -o addr show scope global 2>/dev/null | awk '$2 !~ /^tailscale[[:alnum:]_.-]*/ {print $4}' | normalize_network_lines || true
 }
 
 render_sip_external_setting() {
   local address="$1"
 
   [ -n "$address" ] || return 0
+  if [ "$address" = "SEU_IP_PUBLICO_OU_DNS" ] || [ "$address" = "YOUR_PUBLIC_IP_OR_DNS" ]; then
+    address="$(detect_public_ipv4 || true)"
+    [ -n "$address" ] || return 0
+  fi
   if [[ "$address" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     printf 'externip=%s\n' "$address"
   else
@@ -280,6 +316,8 @@ reconcile_sip_bridge_settings() {
   localnets="$SIP_LOCALNETS"
   if [ -z "$localnets" ]; then
     localnets="$(detect_sip_localnets)"
+  else
+    localnets="$(printf '%s\n' "$localnets" | normalize_network_lines)"
   fi
 
   {
@@ -300,6 +338,35 @@ reconcile_sip_bridge_settings() {
   } >"$rtp_file"
 
   chown asterisk:asterisk "$sip_file" "$rtp_file" 2>/dev/null || true
+}
+
+reconcile_queue_runtime_config() {
+  local file_path="/etc/asterisk/queues.conf"
+
+  cat >"$file_path" <<'EOF'
+[general]
+;
+; Global settings for call queues
+;   (none exist currently)
+;
+; Note that a timeout to fail out of a queue may be passed as part of application call
+; from extensions.conf:
+; Queue(queuename|[options]|[optionalurl]|[announceoverride]|[timeout])
+; example: Queue(dave|t|||45)
+#include queues_general_additional.conf
+#include queues_custom_general.conf
+
+[default]
+;
+; Default settings for queues (currently unused)
+;
+
+#include queues_custom.conf
+#include queues_additional.conf
+#include queues_post_custom.conf
+EOF
+
+  chown asterisk:asterisk "$file_path" 2>/dev/null || true
 }
 
 reconcile_http_redirect_port() {
@@ -529,6 +596,36 @@ normalize_agents_conf() {
   fi
 }
 
+reconcile_callcenter_peerstatus_logoff() {
+  local file_path="/opt/issabel/dialer/AMIEventProcess.class.php"
+
+  [ -f "$file_path" ] || return 0
+
+  python - "$file_path" <<'PY'
+import io
+import sys
+
+path = sys.argv[1]
+with io.open(path, 'r', encoding='utf-8') as fh:
+    text = fh.read()
+
+legacy_guard = """            if (!is_null($a)) {\n                if (strpos($a->channel, 'Agent/') === 0) {\n                    $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.\n                        $params['Peer'].' asociado a '.$a->channel.' - conservando sesion legacy...');\n                    return;\n                }\n                // La extensión usada para login se ha desregistrado - deslogonear al agente\n                $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.\n                    $params['Peer'].' - deslogoneando '.$a->channel.'...');\n                $a->forzarLogoffAgente($this->_ami, $this->_log);\n            }\n"""
+
+original = """            if (!is_null($a)) {\n                // La extensión usada para login se ha desregistrado - deslogonear al agente\n                $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.\n                    $params['Peer'].' - deslogoneando '.$a->channel.'...');\n                $a->forzarLogoffAgente($this->_ami, $this->_log);\n            }\n"""
+
+if legacy_guard in text:
+    sys.exit(0)
+
+if original not in text:
+    raise SystemExit('Unable to locate AMIEventProcess PeerStatus logoff block')
+
+text = text.replace(original, legacy_guard, 1)
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text)
+PY
+}
+
 reconcile_database_configs() {
   ensure_config_value "/etc/amportal.conf" "AMPDBUSER" "$PBX_DB_USER"
   ensure_config_value "/etc/amportal.conf" "AMPDBPASS" "$PBX_DB_PASSWORD"
@@ -643,6 +740,8 @@ main() {
   reconcile_database_configs
   reconcile_legacy_credentials
   reconcile_sip_bridge_settings
+  reconcile_queue_runtime_config
+  reconcile_callcenter_peerstatus_logoff
   reconcile_http_redirect_port
 
   if [ -f "$MARKER" ]; then

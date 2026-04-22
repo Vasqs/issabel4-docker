@@ -2,7 +2,30 @@
 
 ## Overview
 
-This runbook describes how the local Issabel development stack is built, started, verified and maintained.
+This runbook describes how the Issabel stack is built, started, verified and maintained across the supported Docker network modes.
+
+## Compose modes and network contract
+
+The repository supports two mutually exclusive compose layouts:
+
+- `bridge` uses [`docker-compose.yml`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/docker-compose.yml) and Docker `ports:` publishing
+- `hostnet` uses [`docker-compose.hostnet.yml`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/docker-compose.hostnet.yml) and `network_mode: host`
+
+[`scripts/compose-mode.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/compose-mode.sh) resolves `ISSABEL_COMPOSE_MODE`, accepting shell flags and falling back to `.env` when the variable is unset. The operational helpers inherit that selection:
+
+- [`scripts/up.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/up.sh)
+- [`scripts/down.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/down.sh)
+- [`scripts/diagnose.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/diagnose.sh)
+
+`bridge` is a lab-only mode. It is acceptable for local UI validation, quick module work, or isolated loopback tests, but Docker bridge NAT and published UDP ports can break production SIP semantics. The most common symptoms are wrong Contact or SDP addresses, one-way audio, missing DTMF, unstable re-INVITEs, or Janus receiving a Docker bridge address that it cannot reach.
+
+`hostnet` is the supported production and homologation contract for SIP or Janus. Use it whenever Issabel must expose SIP/UDP and RTP directly on the host without Docker NAT:
+
+```bash
+ISSABEL_COMPOSE_MODE=hostnet ./scripts/up.sh
+```
+
+In `hostnet` mode there is no Docker `ports:` section. The container shares the host network stack, so the real host interfaces and routes are visible to SIP peers and to Janus. If your production platform cannot use Docker host networking, the equivalent requirement still applies: run Issabel with direct host networking or another runtime design that avoids Docker bridge NAT for SIP and RTP.
 
 ## Build flow
 
@@ -46,7 +69,8 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 4. runs [`issabel-firstboot`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/issabel-firstboot)
 5. starts Apache and waits for HTTP readiness
 6. starts Asterisk and waits for CLI readiness
-7. monitors the three service PIDs
+7. regenerates and reloads PBX runtime config through `retrieve_conf` and `amportal a r`
+8. monitors the three service PIDs
 
 ## First-boot responsibilities
 
@@ -60,6 +84,7 @@ On container start, [`bootstrap-issabel`](/home/vasqs/Projetos/Issabel/docker/is
 - reconciling the Issabel web admin user in `/var/www/db/acl.db`
 - assigning that user to the `administrator` group if missing
 - aligning `amportal.conf`, `issabelpbx.conf`, `dialerd.conf`, `manager.conf`, `sip_general_custom.conf`, `rtp_custom.conf`, and the HTTP redirect configuration
+- restoring the IssabelPBX queue runtime stub in `/etc/asterisk/queues.conf` so `queues_additional.conf` is actually loaded
 - aligning `call_center.valor_config` with the reconciled AMI credentials
 - running `amportal chown` when available on the first pass of a container lifetime
 - marking first boot complete through `/var/lib/issabel/.bootstrapped`
@@ -92,6 +117,7 @@ Defined in [.env](/home/vasqs/Projetos/Issabel/.env) and referenced by [`docker-
 
 - `ISSABEL_WEB_ADMIN_USER`
 - `ISSABEL_WEB_ADMIN_PASSWORD`
+- `ISSABEL_COMPOSE_MODE`
 - `COMPOSE_PROJECT_NAME`
 - `ISSABEL_CONTAINER_NAME`
 - `ISSABEL_HOSTNAME`
@@ -103,6 +129,7 @@ Current defaults in [.env.example](/home/vasqs/Projetos/Issabel/.env.example):
 
 ```env
 COMPOSE_PROJECT_NAME=issabel
+ISSABEL_COMPOSE_MODE=bridge
 ISSABEL_CONTAINER_NAME=issabel-dev
 ISSABEL_HOSTNAME=issabel.local
 ISSABEL_HTTP_PORT=8088
@@ -120,8 +147,16 @@ Build-time selections are stored in the wizard artifacts:
 
 ## Endpoints
 
+Bridge mode endpoints:
+
 - `http://127.0.0.1:8088`
 - `https://127.0.0.1:8443`
+
+Hostnet mode endpoint contract:
+
+- no Docker published ports
+- web, SIP, and RTP listeners bind directly on the host network stack
+- use the host IP or DNS directly and validate listeners with `./scripts/diagnose.sh` or `ss -ltnup`
 
 Internal container listeners validated during setup:
 
@@ -203,6 +238,8 @@ docker exec issabel-dev bash -lc 'asterisk -rx "core show version" | head -n 2'
 docker exec issabel-dev bash -lc 'sqlite3 -header -column /var/www/db/acl.db "select id,name,md5_password from acl_user;"'
 ```
 
+For production SIP or Janus validation, run the same commands with `ISSABEL_COMPOSE_MODE=hostnet` and confirm there are no Docker-published SIP or RTP ports in the selected compose file.
+
 ## Password rotation
 
 To rotate the Issabel web admin password:
@@ -246,6 +283,25 @@ Then compare the hash with the password in `.env`.
 ### MariaDB is up but Issabel behaves inconsistently
 
 Remember that the web framework auth uses SQLite in `/var/www/db/acl.db`, not MariaDB. MariaDB is used for PBX-related data such as `asteriskcdrdb`.
+
+### SIP or Janus works in the lab but breaks in production
+
+Check the active compose mode first. If the stack is running in `bridge`, treat that as a likely root cause before tuning SIP peers. Published Docker UDP ports are not the production contract for this repository.
+
+Move the stack to `hostnet`:
+
+```bash
+ISSABEL_COMPOSE_MODE=hostnet ./scripts/down.sh
+ISSABEL_COMPOSE_MODE=hostnet ./scripts/up.sh
+```
+
+Then revalidate:
+
+- `./scripts/diagnose.sh`
+- `docker exec issabel-dev bash -lc 'asterisk -rx "sip show settings"'`
+- confirm `ISSABEL_SIP_EXTERNAL_ADDRESS` points to a real host-reachable address
+- confirm `ISSABEL_SIP_LOCALNETS` contains only networks that should bypass that external address
+- confirm Janus or remote peers no longer see a Docker bridge address such as `172.x.x.x`
 
 ### Backup generation fails on `endpoint/ep_config_files`
 

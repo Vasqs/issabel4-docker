@@ -112,6 +112,19 @@ start_asterisk() {
   wait_for_asterisk
 }
 
+refresh_pbx_runtime() {
+  if [ -x /var/lib/asterisk/bin/retrieve_conf ]; then
+    su - asterisk -s /bin/bash -c /var/lib/asterisk/bin/retrieve_conf
+  fi
+
+  if command -v amportal >/dev/null 2>&1; then
+    amportal a r
+  fi
+
+  asterisk -rx "sip reload" >/dev/null 2>&1 || true
+  asterisk -rx "module reload app_queue.so" >/dev/null 2>&1 || true
+}
+
 callcenter_is_installed() {
   [ -x /etc/rc.d/init.d/issabeldialer ] && [ -x /opt/issabel/dialer/dialerd ]
 }
@@ -177,6 +190,7 @@ main() {
   /usr/local/bin/issabel-firstboot
   start_httpd
   start_asterisk
+  refresh_pbx_runtime
   start_callcenter
 
   monitor_services
