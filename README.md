@@ -174,7 +174,6 @@ This was chosen because it is more reliable in Docker for this Issabel 4 base th
 - stop: `./scripts/down.sh`
 - inspect current state: `./scripts/diagnose.sh`
 - sync local modules and apply or revert their customizations: `./scripts/sync-workspace.sh`
-
 ## Portainer
 
 Portainer is optional. Use it for observation only: logs, health, volumes, restarts, shell access. Do not make Portainer the source of truth for this environment. The authoritative configuration remains the selected compose file, either [`docker-compose.yml`](/home/vasqs/Projetos/Issabel/docker-compose.yml) or [`docker-compose.hostnet.yml`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/docker-compose.hostnet.yml), plus [.env](/home/vasqs/Projetos/Issabel/.env).
