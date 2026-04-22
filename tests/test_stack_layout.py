@@ -220,7 +220,6 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("localnets=\"$(printf '%s\\n' \"$localnets\" | normalize_network_lines)\"", firstboot_text)
         self.assertIn('$0 !~ / dev tailscale[[:alnum:]_.-]*/', firstboot_text)
         self.assertIn("$2 !~ /^tailscale[[:alnum:]_.-]*/", firstboot_text)
-
         prepare_text = prepare_script.read_text()
         self.assertIn("issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso", prepare_text)
         self.assertIn("bsdtar -xf", prepare_text)
@@ -497,6 +496,18 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("ISSABEL_COMPOSE_MODE=hostnet", call_center_login_text)
         self.assertIn("Janus", call_center_login_text)
         self.assertIn("lab mode", call_center_login_text)
+
+    def test_telephony_dashboard_apply_hook_registers_menu_idempotently(self) -> None:
+        apply_hook = (ROOT / "modules" / "telephony_dashboard" / "hooks" / "apply.sh").read_text()
+
+        self.assertIn("sqlite3 /var/www/db/menu.db", apply_hook)
+        self.assertIn("DELETE FROM menu WHERE id='telephony_dashboard'", apply_hook)
+        self.assertIn("WHERE NOT EXISTS", apply_hook)
+        self.assertIn("telephony_dashboard", apply_hook)
+        self.assertIn("sqlite3 /var/www/db/acl.db", apply_hook)
+        self.assertIn("INSERT INTO acl_resource", apply_hook)
+        self.assertIn("INSERT INTO acl_group_permission", apply_hook)
+        self.assertIn("ln -s", apply_hook)
 
     def test_telephony_dashboard_apply_hook_registers_menu_idempotently(self) -> None:
         apply_hook = (ROOT / "modules" / "telephony_dashboard" / "hooks" / "apply.sh").read_text()
