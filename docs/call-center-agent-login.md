@@ -45,6 +45,26 @@ The Call Center UI could prefer SIP agents even when a legacy `Agent/N` existed
 for the same operator. This is undesirable in deployments that rely on the
 default Issabel `Agent/N` workflow.
 
+### 5. Tailscale overlay being treated as SIP localnet
+
+In the containerized Asterisk runtime, treating a `tailscale*` interface as a
+`localnet` for `chan_sip` can make SIP dialogs advertise the container bridge
+address (for example `172.18.0.2`) instead of a reachable host address. Janus
+or other external peers may then answer the call but lose media or DTMF because
+subsequent SIP traffic is sent to the unreachable bridge IP.
+
+### 6. Production SIP and Janus behind Docker bridge NAT
+
+The repository now treats Docker `bridge` plus published ports as a lab mode
+only. It may be good enough for loopback checks, but it is not the correct
+production contract for SIP/UDP or Janus because Docker can still hide the real
+host path behind bridge NAT.
+
+For production, homologation, or any serious SIP or Janus validation, run the
+stack with `ISSABEL_COMPOSE_MODE=hostnet` or an equivalent no-NAT runtime.
+Otherwise the PBX can advertise a Docker bridge address or an unstable mapped
+path even when the initial registration appears healthy.
+
 ## Current Behavior
 
 ### Legacy agent priority
@@ -76,6 +96,11 @@ It is responsible for:
 - normalizing `/etc/asterisk/manager.conf` so `admin` keeps the required
   `read`, `write`, `originate`, and `channelvars` settings
 - aligning `call_center.valor_config` with the same AMI user/password
+- patching `/opt/issabel/dialer/AMIEventProcess.class.php` so `PeerStatus`
+  `Unregistered` only force-logoffs dynamic SIP sessions and preserves legacy
+  `Agent/N` console sessions
+- filtering `tailscale*` interfaces out of SIP `localnet` autodetection so
+  external peers never receive Docker bridge addresses in SIP dialogs
 
 The previous runtime hook modules were removed after the bootstrap fix proved
 stable enough for both `Agent/*` and `SIP/*` logins.
@@ -98,3 +123,9 @@ Covered checks:
 - Re-run `python3 -m unittest tests.test_agent_console_login`
 - If the runtime was already in a bad state, the hook restarts `issabeldialer`
   so queue membership and agent mappings are reloaded
+- For production SIP or Janus, run the stack with
+  `ISSABEL_COMPOSE_MODE=hostnet`; keep `bridge` only for local lab workflows
+- For containerized Issabel plus Tailscale peers, do not force
+  `ISSABEL_SIP_LOCALNETS=100.64.0.0/10`; prefer leaving it empty so bootstrap
+  autodetection ignores `tailscale*`, or explicitly set only the Docker-local
+  bridge ranges that should bypass `externip`
