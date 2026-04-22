@@ -64,7 +64,6 @@ For production, homologation, or any serious SIP or Janus validation, run the
 stack with `ISSABEL_COMPOSE_MODE=hostnet` or an equivalent no-NAT runtime.
 Otherwise the PBX can advertise a Docker bridge address or an unstable mapped
 path even when the initial registration appears healthy.
-
 ## Current Behavior
 
 ### Legacy agent priority
