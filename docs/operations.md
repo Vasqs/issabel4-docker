@@ -238,6 +238,7 @@ docker exec issabel-dev bash -lc 'asterisk -rx "core show version" | head -n 2'
 docker exec issabel-dev bash -lc 'sqlite3 -header -column /var/www/db/acl.db "select id,name,md5_password from acl_user;"'
 ```
 
+
 For production SIP or Janus validation, run the same commands with `ISSABEL_COMPOSE_MODE=hostnet` and confirm there are no Docker-published SIP or RTP ports in the selected compose file.
 
 ## Password rotation
