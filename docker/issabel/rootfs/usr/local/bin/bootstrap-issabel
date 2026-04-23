@@ -3,6 +3,8 @@ set -euo pipefail
 
 MARKER="${ISABEL_BOOTSTRAP_MARKER:-/var/lib/issabel/.bootstrapped}"
 BOOTSTRAP_LOG="${ISSABEL_BOOTSTRAP_LOG:-/var/log/issabel-bootstrap.log}"
+HTTP_PORT="${ISSABEL_HTTP_PORT:-80}"
+HTTPS_PORT="${ISSABEL_HTTPS_PORT:-443}"
 MARIADB_PID=""
 HTTPD_PID=""
 ASTERISK_PID=""
@@ -61,7 +63,7 @@ wait_for_mysql() {
 wait_for_httpd() {
   local retries=30
 
-  until curl -fsS http://127.0.0.1/ >/dev/null 2>&1; do
+  until curl -fsS "http://127.0.0.1:${HTTP_PORT}/" >/dev/null 2>&1; do
     retries=$((retries - 1))
     if [ "$retries" -le 0 ]; then
       echo "httpd did not become ready in time" >&2
@@ -69,6 +71,55 @@ wait_for_httpd() {
     fi
     sleep 2
   done
+}
+
+configure_httpd_listen_port() {
+  local conf_file="/etc/httpd/conf/httpd.conf"
+  local tmp_file
+
+  [ -f "$conf_file" ] || return 0
+  tmp_file="$(mktemp)"
+
+  awk -v port="$HTTP_PORT" '
+    BEGIN { replaced = 0 }
+    /^[[:space:]]*Listen[[:space:]]+/ {
+      if (!replaced) {
+        print "Listen " port
+        replaced = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!replaced) {
+        print "Listen " port
+      }
+    }
+  ' "$conf_file" >"$tmp_file"
+
+  mv "$tmp_file" "$conf_file"
+}
+
+configure_httpd_ssl_port() {
+  local conf_file="/etc/httpd/conf.d/ssl.conf"
+  local tmp_file
+
+  [ -f "$conf_file" ] || return 0
+  tmp_file="$(mktemp)"
+
+  awk -v port="$HTTPS_PORT" '
+    /^[[:space:]]*Listen[[:space:]]+443([[:space:]]+https)?[[:space:]]*$/ {
+      print "Listen " port " https"
+      next
+    }
+    /<VirtualHost[[:space:]]+_default_:443>/ {
+      print "<VirtualHost _default_:" port ">"
+      next
+    }
+    { print }
+  ' "$conf_file" >"$tmp_file"
+
+  mv "$tmp_file" "$conf_file"
 }
 
 wait_for_asterisk() {
@@ -184,6 +235,8 @@ main() {
 
   prepare_filesystem
   prepare_database
+  configure_httpd_listen_port
+  configure_httpd_ssl_port
 
   # systemctl enable mariadb httpd asterisk sshd issabel-firstboot
   start_mariadb
