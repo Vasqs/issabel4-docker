@@ -104,6 +104,7 @@ Current defaults are defined in [.env](/home/vasqs/Projetos/Issabel/.env):
 - `WORKSPACE_BIND_SOURCE=.`
 - `ISSABEL_WEB_ADMIN_USER=admin`
 - `ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123`
+- `ISSABEL_INSTALL_DISABLE_MOH=0`
 
 The bootstrap reconciles this web admin user into `/var/www/db/acl.db` on every container start. If you change these values, recreate the container:
 
@@ -115,6 +116,10 @@ Runtime contract:
 - `docker compose up -d --force-recreate issabel` creates a new container and reruns only lightweight first-boot reconciliation
 - `docker compose down && docker compose up -d` also creates a new container and therefore reruns the same lightweight reconciliation path
 - `./scripts/up.sh`, `./scripts/down.sh`, and `./scripts/diagnose.sh` resolve `ISSABEL_COMPOSE_MODE` and pick either `docker-compose.yml` or `docker-compose.hostnet.yml`
+
+Optional install-time patch:
+
+- set `ISSABEL_INSTALL_DISABLE_MOH=1` to apply the post-bootstrap Asterisk overrides that silence MOH for agent login and outbound pre-dial paths
 
 ## Workspace exposure
 
