@@ -19,6 +19,7 @@ RTP_START="${ISSABEL_RTP_START:-10000}"
 RTP_END="${ISSABEL_RTP_END:-10100}"
 MYSQL_SOCKET="${ISSABEL_MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}"
 LEGACY_CREDENTIALS_FILE="${ISSABEL_LEGACY_CREDENTIALS_FILE:-/etc/issabel.conf}"
+DISABLE_MOH_ENABLED="${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}"
 
 sql_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
@@ -30,6 +31,17 @@ mysql_root() {
 
 mysql_root_without_password() {
   mysql --protocol=socket --socket="$MYSQL_SOCKET" -uroot "$@"
+}
+
+disable_moh_is_enabled() {
+  case "${DISABLE_MOH_ENABLED,,}" in
+    1|true|yes|y|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 ensure_mysql_root_password() {
@@ -596,6 +608,203 @@ normalize_agents_conf() {
   fi
 }
 
+apply_optional_disable_moh_patch() {
+  local agents_file="/etc/asterisk/agents.conf"
+  local moh_conf="/etc/asterisk/musiconhold.conf"
+  local moh_custom_conf="/etc/asterisk/musiconhold_custom.conf"
+  local override_conf="/etc/asterisk/extensions_override_issabelpbx.conf"
+  local silence_dir="/var/lib/asterisk/moh/silencio"
+  local silence_sample="$silence_dir/silence.gsm"
+
+  disable_moh_is_enabled || return 0
+  normalize_agents_conf
+
+  [ -f "$agents_file" ] || return 0
+
+  python - "$agents_file" <<'PY'
+import io
+import sys
+
+path = sys.argv[1]
+
+with io.open(path, 'r', encoding='utf-8') as fh:
+    lines = fh.read().splitlines()
+
+if '[agents]' not in lines:
+    if lines and lines[-1] != '':
+        lines.append('')
+    lines.append('[agents]')
+
+output = []
+inside_agents = False
+musiconhold_set = False
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith('[') and stripped.endswith(']'):
+        if inside_agents and not musiconhold_set:
+            output.append('musiconhold=none')
+            musiconhold_set = True
+        inside_agents = (stripped == '[agents]')
+        output.append(line)
+        continue
+
+    if inside_agents and stripped and not stripped.startswith(';'):
+        key = stripped.split('=', 1)[0].strip().lower()
+        if key == 'musiconhold':
+            output.append('musiconhold=none')
+            musiconhold_set = True
+            continue
+
+    if inside_agents and stripped.startswith(';'):
+        candidate = stripped[1:].strip()
+        key = candidate.split('=', 1)[0].strip().lower() if '=' in candidate else ''
+        if key == 'musiconhold':
+            output.append('musiconhold=none')
+            musiconhold_set = True
+            continue
+
+    output.append(line)
+
+if inside_agents and not musiconhold_set:
+    output.append('musiconhold=none')
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(u'\n'.join(output) + u'\n')
+PY
+
+  mkdir -p "$silence_dir"
+  if [ ! -f "$silence_sample" ] && [ -f /var/lib/asterisk/sounds/silence/1.gsm ]; then
+    cp /var/lib/asterisk/sounds/silence/1.gsm "$silence_sample"
+  fi
+  if [ ! -f "$silence_sample" ] && command -v sox >/dev/null 2>&1; then
+    sox -n -r 8000 -c 1 "$silence_dir/silence.wav" trim 0.0 60.0 >/dev/null 2>&1 || true
+  fi
+
+  python - "$moh_custom_conf" <<'PY'
+import io
+import os
+import sys
+
+path = sys.argv[1]
+begin = '; BEGIN ISSABEL OPTIONAL DISABLE MOH'
+end = '; END ISSABEL OPTIONAL DISABLE MOH'
+block = """; BEGIN ISSABEL OPTIONAL DISABLE MOH
+[silencio]
+mode=files
+directory=/var/lib/asterisk/moh/silencio
+sort=alpha
+; END ISSABEL OPTIONAL DISABLE MOH
+"""
+
+text = ''
+if os.path.exists(path):
+    with io.open(path, 'r', encoding='utf-8') as fh:
+        text = fh.read()
+
+if begin in text and end in text:
+    start = text.index(begin)
+    finish = text.index(end) + len(end)
+    text = text[:start] + block + text[finish:]
+else:
+    if text and not text.endswith('\n'):
+        text += '\n'
+    text += block
+    if not text.endswith('\n'):
+        text += '\n'
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text)
+PY
+
+  python - "$moh_conf" <<'PY'
+import io
+import os
+import sys
+
+path = sys.argv[1]
+if not os.path.exists(path):
+    sys.exit(0)
+
+with io.open(path, 'r', encoding='utf-8') as fh:
+    lines = fh.read().splitlines()
+
+output = []
+inside_default = False
+directory_written = False
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith('[') and stripped.endswith(']'):
+        if inside_default and not directory_written:
+            output.append('directory=/var/lib/asterisk/moh/silencio')
+        inside_default = (stripped == '[default]')
+        directory_written = False
+        output.append(line)
+        continue
+
+    if inside_default and stripped.startswith('directory='):
+        output.append('directory=/var/lib/asterisk/moh/silencio')
+        directory_written = True
+        continue
+
+    output.append(line)
+
+if inside_default and not directory_written:
+    output.append('directory=/var/lib/asterisk/moh/silencio')
+
+if '#include musiconhold_custom.conf' not in output:
+    if output and output[-1] != '':
+        output.append('')
+    output.append('#include musiconhold_custom.conf')
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(u'\n'.join(output) + u'\n')
+PY
+
+  python - "$override_conf" <<'PY'
+import io
+import os
+import sys
+
+path = sys.argv[1]
+begin = '; BEGIN ISSABEL OPTIONAL DISABLE MOH'
+end = '; END ISSABEL OPTIONAL DISABLE MOH'
+block = """; BEGIN ISSABEL OPTIONAL DISABLE MOH
+[macro-dialout-trunk-predial-hook]
+exten => s,1,Set(CHANNEL(musicclass)=silencio)
+exten => s,n,MacroExit()
+
+[agentlogin]
+exten => _*8888.,1,Set(AGENTNUMBER=${EXTEN:5})
+exten => _*8888.,n,NoOp(AgentNumber is ${AGENTNUMBER})
+exten => _*8888.,n,Set(CHANNEL(musicclass)=silencio)
+exten => _*8888.,n,AgentLogin(${AGENTNUMBER})
+exten => _*8888.,n,Hangup()
+; END ISSABEL OPTIONAL DISABLE MOH
+"""
+
+text = ''
+if os.path.exists(path):
+    with io.open(path, 'r', encoding='utf-8') as fh:
+        text = fh.read()
+
+if begin in text and end in text:
+    start = text.index(begin)
+    finish = text.index(end) + len(end)
+    text = text[:start] + block + text[finish:]
+else:
+    if text and not text.endswith('\n'):
+        text += '\n'
+    text += block
+    if not text.endswith('\n'):
+        text += '\n'
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text)
+PY
+}
+
 reconcile_callcenter_peerstatus_logoff() {
   local file_path="/opt/issabel/dialer/AMIEventProcess.class.php"
 
@@ -686,6 +895,7 @@ reconcile_legacy_credentials() {
   upsert_config_value "$LEGACY_CREDENTIALS_FILE" "mysqlrootpwd" "$MYSQL_ROOT_PASSWORD"
   reconcile_ami_credentials
   normalize_agents_conf
+  apply_optional_disable_moh_patch
   chmod 600 "$LEGACY_CREDENTIALS_FILE" || true
 }
 
