@@ -104,6 +104,7 @@ Current defaults are defined in [.env](/home/vasqs/Projetos/Issabel/.env):
 - `WORKSPACE_BIND_SOURCE=.`
 - `ISSABEL_WEB_ADMIN_USER=admin`
 - `ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123`
+- `ISSABEL_INSTALL_DISABLE_MOH=0`
 
 The bootstrap reconciles this web admin user into `/var/www/db/acl.db` on every container start. If you change these values, recreate the container:
 
@@ -115,6 +116,10 @@ Runtime contract:
 - `docker compose up -d --force-recreate issabel` creates a new container and reruns only lightweight first-boot reconciliation
 - `docker compose down && docker compose up -d` also creates a new container and therefore reruns the same lightweight reconciliation path
 - `./scripts/up.sh`, `./scripts/down.sh`, and `./scripts/diagnose.sh` resolve `ISSABEL_COMPOSE_MODE` and pick either `docker-compose.yml` or `docker-compose.hostnet.yml`
+
+Optional install-time patch:
+
+- set `ISSABEL_INSTALL_DISABLE_MOH=1` to apply the post-bootstrap Asterisk overrides that silence MOH for agent login and outbound pre-dial paths
 
 ## Workspace exposure
 
@@ -174,7 +179,6 @@ This was chosen because it is more reliable in Docker for this Issabel 4 base th
 - stop: `./scripts/down.sh`
 - inspect current state: `./scripts/diagnose.sh`
 - sync local modules and apply or revert their customizations: `./scripts/sync-workspace.sh`
-
 ## Portainer
 
 Portainer is optional. Use it for observation only: logs, health, volumes, restarts, shell access. Do not make Portainer the source of truth for this environment. The authoritative configuration remains the selected compose file, either [`docker-compose.yml`](/home/vasqs/Projetos/Issabel/docker-compose.yml) or [`docker-compose.hostnet.yml`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/docker-compose.hostnet.yml), plus [.env](/home/vasqs/Projetos/Issabel/.env).

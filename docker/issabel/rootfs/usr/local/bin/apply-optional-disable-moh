@@ -1,0 +1,275 @@
+#!/bin/bash
+set -euo pipefail
+
+MYSQL_ROOT_PASSWORD="${ISSABEL_MYSQL_ROOT_PASSWORD:-iSsAbEl.2o17}"
+MYSQL_SOCKET="${ISSABEL_MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}"
+ASTERISK_USER="${ISSABEL_ASTERISK_USER:-asterisk}"
+
+replace_marked_block() {
+  local path="$1"
+  local begin_marker="$2"
+  local end_marker="$3"
+  local block="$4"
+
+  python - "$path" "$begin_marker" "$end_marker" "$block" <<'PY'
+import io
+import os
+import sys
+
+path, begin, end, block = sys.argv[1:5]
+text = ''
+if os.path.exists(path):
+    with io.open(path, 'r', encoding='utf-8') as fh:
+        text = fh.read()
+
+if begin in text and end in text:
+    start = text.index(begin)
+    finish = text.index(end) + len(end)
+    text = text[:start] + block + text[finish:]
+else:
+    if text and not text.endswith('\n'):
+        text += '\n'
+    text += block
+    if not text.endswith('\n'):
+        text += '\n'
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text)
+PY
+}
+
+mysql_root() {
+  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=socket --socket="$MYSQL_SOCKET" -uroot "$@"
+}
+
+normalize_agents_conf() {
+  local agents_file="/etc/asterisk/agents.conf"
+
+  [ -f "$agents_file" ] || return 0
+
+  python - "$agents_file" <<'PY'
+import io
+import sys
+
+path = sys.argv[1]
+with io.open(path, 'r', encoding='utf-8') as fh:
+    lines = fh.read().splitlines()
+
+if '[agents]' not in lines:
+    if lines and lines[-1] != '':
+        lines.append('')
+    lines.append('[agents]')
+
+output = []
+inside_agents = False
+musiconhold_set = False
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith('[') and stripped.endswith(']'):
+        if inside_agents and not musiconhold_set:
+            output.append('musiconhold=none')
+            musiconhold_set = True
+        inside_agents = (stripped == '[agents]')
+        output.append(line)
+        continue
+
+    if inside_agents:
+        candidate = stripped.lstrip(';').strip()
+        key = candidate.split('=', 1)[0].strip().lower() if '=' in candidate else ''
+        if key == 'musiconhold':
+            output.append('musiconhold=none')
+            musiconhold_set = True
+            continue
+
+    output.append(line)
+
+if inside_agents and not musiconhold_set:
+    output.append('musiconhold=none')
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(u'\n'.join(output) + u'\n')
+PY
+}
+
+ensure_silence_asset() {
+  local silence_dir="/var/lib/asterisk/moh/silencio"
+  local silence_gsm="$silence_dir/silence.gsm"
+  local silence_wav="$silence_dir/silence.wav"
+
+  mkdir -p "$silence_dir"
+
+  if [ ! -f "$silence_gsm" ] && [ -f /var/lib/asterisk/sounds/silence/1.gsm ]; then
+    cp /var/lib/asterisk/sounds/silence/1.gsm "$silence_gsm"
+  fi
+
+  if [ ! -f "$silence_gsm" ] && [ ! -f "$silence_wav" ] && command -v sox >/dev/null 2>&1; then
+    sox -n -r 8000 -c 1 "$silence_wav" trim 0.0 60.0 >/dev/null 2>&1
+  fi
+
+  if ! find "$silence_dir" -maxdepth 1 -type f | grep -q .; then
+    echo "silent MOH asset missing in $silence_dir" >&2
+    return 1
+  fi
+
+  chown -R "$ASTERISK_USER:$ASTERISK_USER" "$silence_dir" || true
+}
+
+reconcile_musiconhold_default() {
+  local moh_conf="/etc/asterisk/musiconhold.conf"
+  local moh_additional="/etc/asterisk/musiconhold_additional.conf"
+  local moh_custom="/etc/asterisk/musiconhold_custom.conf"
+  local begin_marker="; BEGIN ISSABEL OPTIONAL DISABLE MOH"
+  local end_marker="; END ISSABEL OPTIONAL DISABLE MOH"
+  local custom_block
+
+  custom_block=$'; BEGIN ISSABEL OPTIONAL DISABLE MOH\n[silencio]\nmode=files\ndirectory=/var/lib/asterisk/moh/silencio\nsort=alpha\n; END ISSABEL OPTIONAL DISABLE MOH\n'
+  replace_marked_block "$moh_custom" "$begin_marker" "$end_marker" "$custom_block"
+
+  python - "$moh_additional" <<'PY'
+import io
+import os
+import sys
+
+path = sys.argv[1]
+if os.path.exists(path):
+    with io.open(path, 'r', encoding='utf-8') as fh:
+        lines = fh.read().splitlines()
+else:
+    lines = []
+
+output = []
+inside_default = False
+directory_written = False
+default_seen = False
+
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith('[') and stripped.endswith(']'):
+        if inside_default and not directory_written:
+            output.append('directory=/var/lib/asterisk/moh/silencio')
+        inside_default = (stripped == '[default]')
+        default_seen = default_seen or inside_default
+        directory_written = False
+        output.append(line)
+        continue
+
+    if inside_default and stripped.startswith('directory='):
+        output.append('directory=/var/lib/asterisk/moh/silencio')
+        directory_written = True
+        continue
+
+    output.append(line)
+
+if inside_default and not directory_written:
+    output.append('directory=/var/lib/asterisk/moh/silencio')
+
+if not default_seen:
+    if output and output[-1] != '':
+        output.append('')
+    output.extend([
+        '[default]',
+        'mode=files',
+        'directory=/var/lib/asterisk/moh/silencio',
+        'sort=alpha',
+    ])
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(u'\n'.join(output) + u'\n')
+PY
+
+  python - "$moh_conf" <<'PY'
+import io
+import os
+import sys
+
+path = sys.argv[1]
+if os.path.exists(path):
+    with io.open(path, 'r', encoding='utf-8') as fh:
+        lines = fh.read().splitlines()
+else:
+    lines = []
+
+required = [
+    '#include musiconhold_additional.conf',
+    '#include musiconhold_custom.conf',
+]
+
+remaining = [line for line in lines if line not in required]
+remaining.extend(required)
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(u'\n'.join(remaining) + u'\n')
+PY
+
+  chown "$ASTERISK_USER:$ASTERISK_USER" "$moh_conf" "$moh_additional" "$moh_custom" || true
+}
+
+reconcile_dialplan_overrides() {
+  local override_conf="/etc/asterisk/extensions_override_issabelpbx.conf"
+  local begin_marker="; BEGIN ISSABEL OPTIONAL DISABLE MOH"
+  local end_marker="; END ISSABEL OPTIONAL DISABLE MOH"
+  local block
+
+  block=$'; BEGIN ISSABEL OPTIONAL DISABLE MOH\n[macro-dialout-trunk-predial-hook]\nexten => s,1,Set(CHANNEL(musicclass)=silencio)\nexten => s,n,MacroExit()\n\n[agentlogin]\nexten => _*8888.,1,Set(AGENTNUMBER=${EXTEN:5})\nexten => _*8888.,n,NoOp(AgentNumber is ${AGENTNUMBER})\nexten => _*8888.,n,Set(CHANNEL(musicclass)=silencio)\nexten => _*8888.,n,AgentLogin(${AGENTNUMBER})\nexten => _*8888.,n,Hangup()\n; END ISSABEL OPTIONAL DISABLE MOH\n'
+  replace_marked_block "$override_conf" "$begin_marker" "$end_marker" "$block"
+  chown "$ASTERISK_USER:$ASTERISK_USER" "$override_conf" || true
+}
+
+reconcile_parking_config() {
+  local parking_conf="/etc/asterisk/res_parking_custom.conf"
+  local begin_marker="; BEGIN ISSABEL OPTIONAL DISABLE MOH"
+  local end_marker="; END ISSABEL OPTIONAL DISABLE MOH"
+  local block
+
+  block=$'; BEGIN ISSABEL OPTIONAL DISABLE MOH\n[general]\nparkedmusicclass=silencio\n; END ISSABEL OPTIONAL DISABLE MOH\n'
+  replace_marked_block "$parking_conf" "$begin_marker" "$end_marker" "$block"
+  chown "$ASTERISK_USER:$ASTERISK_USER" "$parking_conf" || true
+}
+
+reconcile_queue_musicclass() {
+  local queue_file="/etc/asterisk/queues_post_custom.conf"
+  local begin_marker="; BEGIN ISSABEL OPTIONAL DISABLE MOH"
+  local end_marker="; END ISSABEL OPTIONAL DISABLE MOH"
+  local queues
+  local block
+
+  queues="$(mysql_root -N -B asterisk -e "SELECT extension FROM queues_config ORDER BY extension" 2>/dev/null || true)"
+  block=$'; BEGIN ISSABEL OPTIONAL DISABLE MOH\n'
+
+  if [ -n "$queues" ]; then
+    while IFS= read -r queue; do
+      [ -n "$queue" ] || continue
+      block+=$'['"$queue"$'](+)\n'
+      block+=$'musicclass=silencio\n\n'
+    done <<<"$queues"
+  else
+    block+=$'; no queues_config rows available during patch application\n'
+  fi
+
+  block+=$'; END ISSABEL OPTIONAL DISABLE MOH\n'
+  replace_marked_block "$queue_file" "$begin_marker" "$end_marker" "$block"
+  chown "$ASTERISK_USER:$ASTERISK_USER" "$queue_file" || true
+}
+
+reload_asterisk_runtime() {
+  command -v asterisk >/dev/null 2>&1 || return 0
+
+  asterisk -rx "module reload res_musiconhold.so" >/dev/null 2>&1 || true
+  asterisk -rx "module reload app_queue.so" >/dev/null 2>&1 || true
+  asterisk -rx "module reload app_park.so" >/dev/null 2>&1 || true
+  asterisk -rx "module reload res_parking.so" >/dev/null 2>&1 || true
+  asterisk -rx "dialplan reload" >/dev/null 2>&1 || true
+}
+
+main() {
+  normalize_agents_conf
+  ensure_silence_asset
+  reconcile_musiconhold_default
+  reconcile_dialplan_overrides
+  reconcile_parking_config
+  reconcile_queue_musicclass
+  reload_asterisk_runtime
+}
+
+main "$@"

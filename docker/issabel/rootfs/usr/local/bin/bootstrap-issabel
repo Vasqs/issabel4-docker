@@ -191,6 +191,12 @@ main() {
   start_httpd
   start_asterisk
   refresh_pbx_runtime
+  if [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "1" ] || \
+     [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "true" ] || \
+     [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "yes" ] || \
+     [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "on" ]; then
+    /usr/local/bin/apply-optional-disable-moh
+  fi
   start_callcenter
 
   monitor_services

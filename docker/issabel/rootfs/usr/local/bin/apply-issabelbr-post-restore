@@ -54,7 +54,6 @@ apply_file_reconciliations() {
   sed -i '/extensions_tratamento_hangupcause.conf/d' /etc/asterisk/extensions_override_issabel.conf /etc/asterisk/extensions_override_issabelpbx.conf || true
   echo "#include /etc/asterisk/extensions_tratamento_hangupcause.conf" >> /etc/asterisk/extensions_override_issabelpbx.conf
   sed -i -r 's/666699/33697B/' /var/www/html/modules/pbxadmin/themes/default/css/mainstyle.css /var/www/html/admin/assets/css/mainstyle.css || true
-  sed -i -r 's/;musiconhold=default/musiconhold=none/' /etc/asterisk/agents.conf || true
   chown asterisk:asterisk /etc/asterisk/extensions_tratamento_hangupcause.conf || true
   chown -R asterisk:asterisk /var/lib/asterisk/agi-bin || true
 }
@@ -78,6 +77,12 @@ main() {
 
   apply_file_reconciliations
   /usr/local/bin/issabel-firstboot
+  if [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "1" ] || \
+     [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "true" ] || \
+     [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "yes" ] || \
+     [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "on" ]; then
+    /usr/local/bin/apply-optional-disable-moh
+  fi
   /usr/sbin/amportal reload >/dev/null 2>&1 || true
 }
 

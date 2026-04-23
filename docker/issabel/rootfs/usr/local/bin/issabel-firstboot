@@ -19,6 +19,7 @@ RTP_START="${ISSABEL_RTP_START:-10000}"
 RTP_END="${ISSABEL_RTP_END:-10100}"
 MYSQL_SOCKET="${ISSABEL_MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}"
 LEGACY_CREDENTIALS_FILE="${ISSABEL_LEGACY_CREDENTIALS_FILE:-/etc/issabel.conf}"
+DISABLE_MOH_ENABLED="${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}"
 
 sql_escape() {
   printf "%s" "$1" | sed "s/'/''/g"
@@ -30,6 +31,17 @@ mysql_root() {
 
 mysql_root_without_password() {
   mysql --protocol=socket --socket="$MYSQL_SOCKET" -uroot "$@"
+}
+
+disable_moh_is_enabled() {
+  case "${DISABLE_MOH_ENABLED,,}" in
+    1|true|yes|y|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 ensure_mysql_root_password() {
@@ -596,6 +608,11 @@ normalize_agents_conf() {
   fi
 }
 
+apply_optional_disable_moh_patch() {
+  disable_moh_is_enabled || return 0
+  /usr/local/bin/apply-optional-disable-moh
+}
+
 reconcile_callcenter_peerstatus_logoff() {
   local file_path="/opt/issabel/dialer/AMIEventProcess.class.php"
 
@@ -686,6 +703,7 @@ reconcile_legacy_credentials() {
   upsert_config_value "$LEGACY_CREDENTIALS_FILE" "mysqlrootpwd" "$MYSQL_ROOT_PASSWORD"
   reconcile_ami_credentials
   normalize_agents_conf
+  apply_optional_disable_moh_patch
   chmod 600 "$LEGACY_CREDENTIALS_FILE" || true
 }
 
