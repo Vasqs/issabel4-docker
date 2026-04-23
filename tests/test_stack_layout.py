@@ -467,6 +467,25 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn('${ISSABELBR_REPO_DIR}/etc/asterisk/', helper_text)
         self.assertIn('${ISSABELBR_REPO_DIR}/web2/', helper_text)
 
+    def test_optional_disable_moh_contract_is_delegated_to_standalone_script(self) -> None:
+        firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
+        firstboot_text = firstboot_script.read_text()
+        disable_moh_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-optional-disable-moh"
+        dockerfile_text = (ROOT / "docker" / "issabel" / "Dockerfile").read_text()
+
+        self.assertTrue(disable_moh_script.exists(), "standalone silent MOH script must exist")
+        self.assertIn("/usr/local/bin/apply-optional-disable-moh", firstboot_text)
+        self.assertNotIn("python - \"$moh_custom_conf\"", firstboot_text)
+        self.assertNotIn("python - \"$override_conf\"", firstboot_text)
+        self.assertIn("/usr/local/bin/apply-optional-disable-moh", dockerfile_text)
+
+        disable_moh_text = disable_moh_script.read_text()
+        self.assertIn("parkedmusicclass=silencio", disable_moh_text)
+        self.assertIn("queues_post_custom.conf", disable_moh_text)
+        self.assertIn("musicclass=silencio", disable_moh_text)
+        self.assertIn("musiconhold_custom.conf", disable_moh_text)
+        self.assertIn("musiconhold_additional.conf", disable_moh_text)
+
     def test_gitignore_and_docs_cover_local_module_contract(self) -> None:
         gitignore_text = (ROOT / ".gitignore").read_text()
         self.assertIn("modules/", gitignore_text)
