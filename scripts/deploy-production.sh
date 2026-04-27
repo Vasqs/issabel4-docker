@@ -9,6 +9,7 @@ BUILD_ENV_FILE="${ROOT_DIR}/.build/install.env"
 source "${ROOT_DIR}/scripts/compose-mode.sh"
 
 export ISSABEL_COMPOSE_MODE=hostnet
+export ISSABEL_HTTPS_PORT="${ISSABEL_HTTPS_PORT:-${ISSABEL_HOSTNET_HTTPS_PORT:-443}}"
 
 require_file() {
   local path="$1"
