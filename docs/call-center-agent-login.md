@@ -39,13 +39,25 @@ When both a legacy `Agent/N` and a SIP agent shared the same physical peer,
 for `SIP/1001` could log out `Agent/1`, which broke the default GUI-created
 agent flow.
 
-### 4. Agent Console default selection
+### 4. Legacy `Agent/N` session being dropped during `AgentsComplete` races
+
+During login races, `queue_log` could show `AGENTLOGIN` followed by
+`AGENTLOGOFF` within a few seconds for the same legacy identity. The strongest
+culprit was `AMIEventProcess::msg_AgentsComplete`: if Asterisk already reported
+the agent as logged in but the dialer still carried a transient
+`estado_consola = 'logged-out'`, the reconciliation path could force-logoff the
+same `Agent/N` session that had just been accepted by Asterisk. The fix is
+intentionally narrow: it only preserves the session when the dialer itself has
+evidence of a local login still in flight, such as `extension` or
+`logging_inicio`.
+
+### 5. Agent Console default selection
 
 The Call Center UI could prefer SIP agents even when a legacy `Agent/N` existed
 for the same operator. This is undesirable in deployments that rely on the
 default Issabel `Agent/N` workflow.
 
-### 5. Tailscale overlay being treated as SIP localnet
+### 6. Tailscale overlay being treated as SIP localnet
 
 In the containerized Asterisk runtime, treating a `tailscale*` interface as a
 `localnet` for `chan_sip` can make SIP dialogs advertise the container bridge
@@ -53,7 +65,7 @@ address (for example `172.18.0.2`) instead of a reachable host address. Janus
 or other external peers may then answer the call but lose media or DTMF because
 subsequent SIP traffic is sent to the unreachable bridge IP.
 
-### 6. Production SIP and Janus behind Docker bridge NAT
+### 7. Production SIP and Janus behind Docker bridge NAT
 
 The repository now treats Docker `bridge` plus published ports as a lab mode
 only. It may be good enough for loopback checks, but it is not the correct
@@ -64,6 +76,25 @@ For production, homologation, or any serious SIP or Janus validation, run the
 stack with `ISSABEL_COMPOSE_MODE=hostnet` or an equivalent no-NAT runtime.
 Otherwise the PBX can advertise a Docker bridge address or an unstable mapped
 path even when the initial registration appears healthy.
+
+### 8. Janus host-mode using Docker DNS names for SIP registration
+
+When the painel-side Janus runs in `network_mode: host`, names such as
+`issabel-dev` are no longer resolved by Docker's internal DNS. In that mode,
+using `issabel-dev` as the SIP registrar/proxy can degrade the browser runtime
+immediately with `registration_failed` / `503 DNS Error`, which leaves the
+panel in `session.degraded` before the agent login even starts.
+
+For the validated local topology where Issabel publishes SIP on the host, the
+stable registration target is:
+
+- `VOICE_GATEWAY_SIP_DOMAIN=127.0.0.1`
+- `VOICE_GATEWAY_SIP_PROXY=127.0.0.1`
+- `VOICE_GATEWAY_SIP_OUTBOUND_DOMAIN=127.0.0.1`
+
+This is not a call-center identity change. `Agent/N` remains the canonical
+call-center identity; this only fixes how the painel-side Janus reaches the SIP
+registrar.
 ## Current Behavior
 
 ### Legacy agent priority
@@ -74,6 +105,9 @@ When both formats exist for the same operator:
 - `Agent/N` must keep working as the priority flow
 - `SIP/ramal` remains available as a dynamic alternative
 - SIP peer events must not tear down the `Agent/N` session
+- `AgentsComplete` must not force-logoff a just-logged-in `Agent/N` while the
+  dialer still lags behind Asterisk state and the local login is still in
+  flight
 
 ### SIP dynamic support
 
@@ -98,6 +132,10 @@ It is responsible for:
 - patching `/opt/issabel/dialer/AMIEventProcess.class.php` so `PeerStatus`
   `Unregistered` only force-logoffs dynamic SIP sessions and preserves legacy
   `Agent/N` console sessions
+- patching `/opt/issabel/dialer/AMIEventProcess.class.php` so
+  `msg_AgentsComplete` preserves legacy `Agent/N` sessions when Asterisk has
+  already accepted the login but the dialer still reports a transient
+  `logged-out` state for the same locally initiated login
 - filtering `tailscale*` interfaces out of SIP `localnet` autodetection so
   external peers never receive Docker bridge addresses in SIP dialogs
 
@@ -128,3 +166,7 @@ Covered checks:
   `ISSABEL_SIP_LOCALNETS=100.64.0.0/10`; prefer leaving it empty so bootstrap
   autodetection ignores `tailscale*`, or explicitly set only the Docker-local
   bridge ranges that should bypass `externip`
+- When validating the painel `janus-browser` flow, trust `queue_log` plus the
+  bridge `status` endpoint before trusting the browser badge alone. The browser
+  can remain `in-call` briefly while the PBX has already issued `AGENTLOGOFF`,
+  and the opposite can also happen during short-lived login races.
