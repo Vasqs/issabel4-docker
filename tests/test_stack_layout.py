@@ -134,9 +134,11 @@ class IssabelStackLayoutTests(unittest.TestCase):
             "issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-fax issabel-reports",
         )
         self.assertEqual(service["environment"]["ISSABEL_SIP_PORT"], "5060")
+        self.assertEqual(service["environment"]["ISSABEL_HTTPS_PORT"], "8443")
         self.assertEqual(service["environment"]["ISSABEL_RTP_START"], "10000")
         self.assertEqual(service["environment"]["ISSABEL_RTP_END"], "10100")
         self.assertIn("network_mode: host", compose_text)
+        self.assertIn("ISSABEL_HTTPS_PORT: ${ISSABEL_HTTPS_PORT:-443}", compose_text)
         self.assertNotIn("ports:", compose_text)
         self.assertEqual(service["tmpfs"], ["/run", "/run/lock", "/tmp"])
 
@@ -254,10 +256,12 @@ class IssabelStackLayoutTests(unittest.TestCase):
 
         deploy_text = deploy_script.read_text()
         self.assertIn("ISSABEL_COMPOSE_MODE=hostnet", deploy_text)
+        self.assertIn('ISSABEL_HTTPS_PORT="${ISSABEL_HTTPS_PORT:-${ISSABEL_HOSTNET_HTTPS_PORT:-443}}"', deploy_text)
         self.assertIn("BUILD_ENV_FILE", deploy_text)
         self.assertIn("PROFILE_FILE", deploy_text)
         self.assertIn("missing required build artifact", deploy_text)
         self.assertNotIn("resolve-install-profile.py", deploy_text)
+        self.assertIn('HTTPS_REDIRECT_PORT="${ISSABEL_HTTPS_PORT:-443}"', firstboot_text)
         self.assertIn('"${COMPOSE_CMD[@]}" build issabel', deploy_text)
         self.assertIn('"${COMPOSE_CMD[@]}" up -d --force-recreate issabel', deploy_text)
         self.assertIn('"${ROOT_DIR}/scripts/sync-workspace.sh"', deploy_text)
@@ -444,6 +448,13 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertEqual(service["environment"]["ISSABEL_RTP_END"], "12100")
         self.assertNotIn("ports", service)
         self.assertEqual(service["volumes"][0]["source"], "/srv/workspace")
+
+    def test_compose_mode_helper_defaults_hostnet_https_to_443_without_touching_bridge(self) -> None:
+        compose_helper = ROOT / "scripts" / "compose-mode.sh"
+        helper_text = compose_helper.read_text()
+
+        self.assertIn('if [[ "${COMPOSE_DESCRIPTION}" == "hostnet" && -z "${ISSABEL_HTTPS_PORT+x}" ]]; then', helper_text)
+        self.assertIn('export ISSABEL_HTTPS_PORT="${ISSABEL_HOSTNET_HTTPS_PORT:-443}"', helper_text)
 
     def test_firstboot_seeds_callcenter_and_pbx_database_contract(self) -> None:
         firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"

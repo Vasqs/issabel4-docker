@@ -156,6 +156,8 @@ ISSABEL_WEB_ADMIN_USER=admin
 ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123
 ```
 
+Host-network scripts override the HTTPS default to `443` unless you explicitly export `ISSABEL_HTTPS_PORT` or `ISSABEL_HOSTNET_HTTPS_PORT` in the shell first.
+
 Build-time selections are stored in the wizard artifacts:
 
 - `.issabel-install.conf`
@@ -173,6 +175,7 @@ Hostnet mode endpoint contract:
 
 - no Docker published ports
 - web, SIP, and RTP listeners bind directly on the host network stack
+- HTTPS defaults to `443`
 - use the host IP or DNS directly and validate listeners with `./scripts/diagnose.sh` or `ss -ltnup`
 
 Internal container listeners validated during setup:
