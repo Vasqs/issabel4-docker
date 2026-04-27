@@ -7,6 +7,7 @@ This project packages Issabel 4 for Docker-based development, lab validation and
 - local image build from `issabel4-NIGHTLY-AST18-USB-DVD-x86_64-20211207.iso`
 - persistent MariaDB, Asterisk config and runtime state through Docker volumes
 - bridge-mode local web access on `http://127.0.0.1:8088` and `https://127.0.0.1:8443`
+- host-network production web access on `https://<host-or-dns>/` via port `443` by default
 - host-network compose mode for production SIP/Janus traffic without Docker NAT
 - mounted workspace at `/workspace`
 - controlled sync of development assets into the Issabel runtime
@@ -75,6 +76,8 @@ The production deploy helper uses the same contract directly:
 ./scripts/deploy-production.sh
 ```
 
+By default, that helper exports `ISSABEL_HTTPS_PORT=443` before calling Compose, so a local `.env` value like `8443` does not leak into production host-network deploys. If you intentionally need another HTTPS port in hostnet mode, export either `ISSABEL_HTTPS_PORT` or `ISSABEL_HOSTNET_HTTPS_PORT` before running the script.
+
 That helper applies the production update in this order:
 
 1. verifies that `.issabel-install.conf` and `.build/install.env` already exist
@@ -122,6 +125,8 @@ Current defaults are defined in [.env](/home/vasqs/Projetos/Issabel/.env):
 - `WORKSPACE_BIND_SOURCE=.`
 - `ISSABEL_WEB_ADMIN_USER=admin`
 - `ISSABEL_WEB_ADMIN_PASSWORD=DevAdmin123`
+
+Additionally, hostnet-oriented scripts honor `ISSABEL_HOSTNET_HTTPS_PORT=443` as the production default when no explicit `ISSABEL_HTTPS_PORT` is exported in the shell.
 - `ISSABEL_INSTALL_DISABLE_MOH=0`
 
 The bootstrap reconciles this web admin user into `/var/www/db/acl.db` on every container start. If you change these values, recreate the container:

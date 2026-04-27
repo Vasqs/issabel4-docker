@@ -91,6 +91,10 @@ issabel_compose_init() {
     return 1
   fi
 
+  if [[ "${COMPOSE_DESCRIPTION}" == "hostnet" && -z "${ISSABEL_HTTPS_PORT+x}" ]]; then
+    export ISSABEL_HTTPS_PORT="${ISSABEL_HOSTNET_HTTPS_PORT:-443}"
+  fi
+
   COMPOSE_CMD+=(-f "${COMPOSE_FILE}")
 }
 
