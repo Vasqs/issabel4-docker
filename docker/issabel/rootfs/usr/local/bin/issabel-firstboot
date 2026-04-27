@@ -648,6 +648,78 @@ with io.open(path, 'w', encoding='utf-8') as fh:
 PY
 }
 
+reconcile_callcenter_agentscomplete_logoff() {
+  local file_path="/opt/issabel/dialer/AMIEventProcess.class.php"
+
+  [ -f "$file_path" ] || return 0
+
+  python - "$file_path" <<'PY'
+import io
+import re
+import sys
+
+path = sys.argv[1]
+with io.open(path, 'r', encoding='utf-8') as fh:
+    text = fh.read()
+
+method_start = text.find('function msg_AgentsComplete')
+if method_start == -1:
+    raise SystemExit('Unable to locate AMIEventProcess::msg_AgentsComplete')
+
+next_method = text.find('\n    function ', method_start + 1)
+if next_method == -1:
+    next_method = len(text)
+
+method_text = text[method_start:next_method]
+guard_marker = 'Asterisk reporta sesion activa legacy para '
+if guard_marker in method_text:
+    sys.exit(0)
+
+if "logged-out" not in method_text:
+    raise SystemExit("Unable to locate msg_AgentsComplete logged-out reconciliation branch")
+
+lines = method_text.splitlines(True)
+target_idx = None
+for idx, line in enumerate(lines):
+    if '$a->forzarLogoffAgente($this->_ami, $this->_log);' in line:
+        context = ''.join(lines[max(0, idx - 20):idx + 1])
+        if "logged-out" in context:
+            target_idx = idx
+            break
+
+if target_idx is None:
+    raise SystemExit('Unable to locate msg_AgentsComplete legacy logoff call')
+
+start_idx = None
+for idx in range(target_idx, max(-1, target_idx - 8), -1):
+    if "$this->_log->output(" in lines[idx]:
+        start_idx = idx
+        if idx > 0 and 'deslogonear al agente' in lines[idx - 1]:
+            start_idx = idx - 1
+        break
+
+if start_idx is None:
+    raise SystemExit('Unable to locate msg_AgentsComplete logoff block start')
+
+indent = re.match(r'(\s*)', lines[start_idx]).group(1)
+original_block = ''.join(lines[start_idx:target_idx + 1])
+guard_block = """{indent}if (strpos($a->channel, 'Agent/') === 0 && (!is_null($a->extension) || !is_null($a->logging_inicio))) {{
+{indent}    $this->_log->output('INFO: '.__METHOD__.' Asterisk reporta sesion activa legacy para '.
+{indent}        $a->channel.' mientras dialer conserva estado logged-out pero el login local sigue en curso,'.
+{indent}        ' conservando estado para evitar logoff espurio...');
+{indent}    continue;
+{indent}}}
+""".format(indent=indent)
+
+lines[start_idx:target_idx + 1] = [guard_block + original_block]
+updated_method = ''.join(lines)
+text = text[:method_start] + updated_method + text[next_method:]
+
+with io.open(path, 'w', encoding='utf-8') as fh:
+    fh.write(text)
+PY
+}
+
 reconcile_database_configs() {
   ensure_config_value "/etc/amportal.conf" "AMPDBUSER" "$PBX_DB_USER"
   ensure_config_value "/etc/amportal.conf" "AMPDBPASS" "$PBX_DB_PASSWORD"
@@ -765,6 +837,7 @@ main() {
   reconcile_sip_bridge_settings
   reconcile_queue_runtime_config
   reconcile_callcenter_peerstatus_logoff
+  reconcile_callcenter_agentscomplete_logoff
   reconcile_http_redirect_port
 
   if [ -f "$MARKER" ]; then
