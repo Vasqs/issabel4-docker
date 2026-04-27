@@ -24,6 +24,7 @@ This project packages Issabel 4 for Docker-based development, lab validation and
 - [`docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets`](/home/vasqs/Projetos/Issabel/docker/issabel/rootfs/usr/local/bin/apply-issabelbr-build-assets): build-time IssabelBR package and asset integration
 - [`scripts/resolve-install-profile.py`](/home/vasqs/Projetos/Issabel/scripts/resolve-install-profile.py): guided installer for ISO, Asterisk package and optional modules
 - [`scripts/up.sh`](/home/vasqs/Projetos/Issabel/scripts/up.sh): build and start stack
+- [`scripts/deploy-production.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/deploy-production.sh): hostnet production deploy helper
 - [`scripts/build-image.sh`](/home/vasqs/Projetos/Issabel/scripts/build-image.sh): build image only
 - [`scripts/down.sh`](/home/vasqs/Projetos/Issabel/scripts/down.sh): stop stack
 - [`scripts/diagnose.sh`](/home/vasqs/Projetos/Issabel/scripts/diagnose.sh): inspect processes, listeners and logs
@@ -67,6 +68,23 @@ Use `hostnet` in production, homologation, or any environment where Issabel must
 ```bash
 ISSABEL_COMPOSE_MODE=hostnet ./scripts/up.sh
 ```
+
+The production deploy helper uses the same contract directly:
+
+```bash
+./scripts/deploy-production.sh
+```
+
+That helper applies the production update in this order:
+
+1. verifies that `.issabel-install.conf` and `.build/install.env` already exist
+2. rebuilds the `issabel` image and recreates the service in `hostnet`
+3. runs `./scripts/sync-workspace.sh`
+4. shows the final service status
+
+It intentionally does not run `resolve-install-profile.py` during production deploy.
+Build profile resolution remains a separate preparatory step, so production deploy
+does not rewrite `.env` or installation artifacts implicitly.
 
 In `hostnet` mode Docker does not publish or NAT HTTP, HTTPS, SIP, or RTP ports. The container shares the host network stack, so peers see the host's real addresses instead of a Docker bridge address. If you deploy outside Docker host networking, the equivalent requirement is the same: no Docker bridge NAT between Issabel and the SIP or Janus peers.
 
@@ -115,7 +133,7 @@ Runtime contract:
 - `docker compose restart issabel` reuses the current container and does not revisit build-time provisioning
 - `docker compose up -d --force-recreate issabel` creates a new container and reruns only lightweight first-boot reconciliation
 - `docker compose down && docker compose up -d` also creates a new container and therefore reruns the same lightweight reconciliation path
-- `./scripts/up.sh`, `./scripts/down.sh`, and `./scripts/diagnose.sh` resolve `ISSABEL_COMPOSE_MODE` and pick either `docker-compose.yml` or `docker-compose.hostnet.yml`
+- `./scripts/up.sh`, `./scripts/deploy-production.sh`, `./scripts/down.sh`, and `./scripts/diagnose.sh` resolve `ISSABEL_COMPOSE_MODE` and pick either `docker-compose.yml` or `docker-compose.hostnet.yml`
 
 Optional install-time patch:
 

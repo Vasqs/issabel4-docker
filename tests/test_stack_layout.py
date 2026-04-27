@@ -145,6 +145,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         prepare_script = ROOT / "scripts" / "prepare-iso-root.sh"
         resolve_script = ROOT / "scripts" / "resolve-install-profile.py"
         sync_script = ROOT / "scripts" / "sync-workspace.sh"
+        deploy_script = ROOT / "scripts" / "deploy-production.sh"
         rootfs_sync_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "sync-workspace"
         diagnose_script = ROOT / "scripts" / "diagnose.sh"
         build_script = ROOT / "scripts" / "build-image.sh"
@@ -167,6 +168,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
             prepare_script,
             resolve_script,
             sync_script,
+            deploy_script,
             rootfs_sync_script,
             diagnose_script,
             build_script,
@@ -249,6 +251,16 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("/var/www/html/modules", sync_text)
         self.assertIn("/usr/local/bin/sync-workspace", sync_text)
         self.assertIn("issabel_compose_init", sync_text)
+
+        deploy_text = deploy_script.read_text()
+        self.assertIn("ISSABEL_COMPOSE_MODE=hostnet", deploy_text)
+        self.assertIn("BUILD_ENV_FILE", deploy_text)
+        self.assertIn("PROFILE_FILE", deploy_text)
+        self.assertIn("missing required build artifact", deploy_text)
+        self.assertNotIn("resolve-install-profile.py", deploy_text)
+        self.assertIn('"${COMPOSE_CMD[@]}" build issabel', deploy_text)
+        self.assertIn('"${COMPOSE_CMD[@]}" up -d --force-recreate issabel', deploy_text)
+        self.assertIn('"${ROOT_DIR}/scripts/sync-workspace.sh"', deploy_text)
 
         compose_helper_text = compose_helper.read_text()
         self.assertIn("ISSABEL_COMPOSE_MODE", compose_helper_text)
