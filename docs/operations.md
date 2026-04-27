@@ -14,6 +14,7 @@ The repository supports two mutually exclusive compose layouts:
 [`scripts/compose-mode.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/compose-mode.sh) resolves `ISSABEL_COMPOSE_MODE`, accepting shell flags and falling back to `.env` when the variable is unset. The operational helpers inherit that selection:
 
 - [`scripts/up.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/up.sh)
+- [`scripts/deploy-production.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/deploy-production.sh)
 - [`scripts/down.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/down.sh)
 - [`scripts/diagnose.sh`](/mnt/a50116fc-d882-495c-9386-3c0c4b164506/Projects/Issabel/scripts/diagnose.sh)
 
@@ -24,6 +25,22 @@ The repository supports two mutually exclusive compose layouts:
 ```bash
 ISSABEL_COMPOSE_MODE=hostnet ./scripts/up.sh
 ```
+
+For the production deploy path, use:
+
+```bash
+./scripts/deploy-production.sh
+```
+
+The helper intentionally syncs modules and overlays after the container update,
+so the runtime first reflects image and rootfs changes from the repository and
+then receives the workspace payload through `sync-workspace.sh`.
+
+The helper is intentionally conservative:
+
+- it fails if `.issabel-install.conf` or `.build/install.env` are missing
+- it does not run `resolve-install-profile.py` during production deploy
+- it rebuilds first, recreates the `issabel` service second, and syncs modules and overlays last
 
 In `hostnet` mode there is no Docker `ports:` section. The container shares the host network stack, so the real host interfaces and routes are visible to SIP peers and to Janus. If your production platform cannot use Docker host networking, the equivalent requirement still applies: run Issabel with direct host networking or another runtime design that avoids Docker bridge NAT for SIP and RTP.
 
