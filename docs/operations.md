@@ -258,6 +258,28 @@ docker exec issabel-dev bash -lc 'asterisk -rx "core show version" | head -n 2'
 docker exec issabel-dev bash -lc 'sqlite3 -header -column /var/www/db/acl.db "select id,name,md5_password from acl_user;"'
 ```
 
+## Agent login troubleshooting
+
+For voice-bar or call-center login incidents, validate state in this order:
+
+1. `/var/log/asterisk/queue_log`
+2. `modules/callcenter_bridge` status endpoints
+3. Asterisk CLI such as `queue show`, `agent show online`, and `sip show peer`
+4. browser or painel badge state
+
+Operational rules:
+
+- a plain numeric panel value such as `34` is the Issabel agent `Number`, not
+  the database `id`
+- use explicit `route:<id>` or `id:<id>` only for internal debugging or stable
+  backend references
+- if the browser shows `logging`, `ringing`, or `degraded`, do not conclude
+  failure until `queue_log` and the bridge `status` agree on the same
+  `Agent/N`
+- the one-click `Logar` flow may include a technical bootstrap call for
+  campaign activation; it is expected to be handled through the bridge and the
+  painel Janus bootstrap path rather than by a manual second click
+
 For production SIP or Janus validation, run the same commands with `ISSABEL_COMPOSE_MODE=hostnet` and confirm there are no Docker-published SIP or RTP ports in the selected compose file.
 
 ## Password rotation

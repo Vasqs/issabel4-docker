@@ -97,6 +97,23 @@ call-center identity; this only fixes how the painel-side Janus reaches the SIP
 registrar.
 ## Current Behavior
 
+### Operator-entered agent references
+
+The painel field historically called `pbx_agent_id` accepts the same value that
+an operator sees in `Call Center / Agent Options / Agents`: the agent
+`Number`.
+
+That means:
+
+- plain numeric references such as `34` must resolve by `call_center.agent.number`
+- explicit internal references such as `route:34` or `id:34` may resolve by
+  the database primary key when a stable route identifier is required
+- debugging a mismatch must compare the bridge `/status` result, `queue show`,
+  and `queue_log` for the same effective `Agent/N`
+
+Treating a plain numeric value as the database `id` is incorrect for normal
+panel operation and can silently map one user to another agent.
+
 ### Legacy agent priority
 
 When both formats exist for the same operator:
@@ -117,6 +134,21 @@ If a SIP agent exists, the runtime hook ensures:
 - the queue has `eventmemberstatus=yes`
 - the queue has `eventwhencalled=yes`
 - the dialer is restarted so it reloads membership state
+
+### Bootstrap login call handling
+
+The validated one-click `Logar` flow now has an explicit contract across bridge,
+gateway, and browser:
+
+- the bridge persists a pending login window and reports `status=logging` while
+  ECCP and call-center runtime state are still converging
+- the painel-side gateway marks the first technical post-register call used for
+  campaign activation as `bootstrap_login_call`
+- the browser auto-answers only that marked bootstrap call locally, instead of
+  relying on a slower `gateway -> Livewire -> browser` roundtrip
+
+This keeps one-click login behavior without requiring the browser to guess that
+every `ringing` event during `logging` should be auto-answered.
 
 ## Bootstrap
 
@@ -166,6 +198,9 @@ Covered checks:
   `ISSABEL_SIP_LOCALNETS=100.64.0.0/10`; prefer leaving it empty so bootstrap
   autodetection ignores `tailscale*`, or explicitly set only the Docker-local
   bridge ranges that should bypass `externip`
+- If a panel user enters `34`, validate it against the Issabel agent `Number`
+  first. Use `route:34` or `id:34` only when you intentionally need the
+  internal database identity.
 - When validating the painel `janus-browser` flow, trust `queue_log` plus the
   bridge `status` endpoint before trusting the browser badge alone. The browser
   can remain `in-call` briefly while the PBX has already issued `AGENTLOGOFF`,
