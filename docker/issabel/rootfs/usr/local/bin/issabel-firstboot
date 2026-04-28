@@ -274,6 +274,7 @@ detect_public_ipv4() {
 
   if command -v python >/dev/null 2>&1; then
     ip="$(python - <<'PY' 2>/dev/null || true
+# -*- coding: utf-8 -*-
 import sys
 import urllib.request
 
@@ -386,6 +387,7 @@ reconcile_http_redirect_port() {
 
   [ -f "$file_path" ] || return 0
   python - "$file_path" "$HTTPS_REDIRECT_PORT" <<'PY'
+# -*- coding: utf-8 -*-
 import io
 import sys
 
@@ -417,6 +419,7 @@ reconcile_manager_secret() {
   [ -f "$file_path" ] || return 0
 
   python - "$file_path" "$ami_user" "$ami_password" "$read_permissions" "$write_permissions" <<'PY'
+# -*- coding: utf-8 -*-
 import io
 import sys
 
@@ -524,6 +527,7 @@ reconcile_manager_general_settings() {
   [ -f "$file_path" ] || return 0
 
   python - "$file_path" <<'PY'
+# -*- coding: utf-8 -*-
 import io
 import sys
 
@@ -619,6 +623,7 @@ reconcile_callcenter_peerstatus_logoff() {
   [ -f "$file_path" ] || return 0
 
   python - "$file_path" <<'PY'
+# -*- coding: utf-8 -*-
 import io
 import re
 import sys
