@@ -10,3 +10,5 @@ overlays/*
 !overlays/README.md
 .playwright-mcp/
 .worktrees/
+# CocoIndex Code (ccc)
+/.cocoindex_code/

@@ -620,23 +620,70 @@ reconcile_callcenter_peerstatus_logoff() {
 
   python - "$file_path" <<'PY'
 import io
+import re
 import sys
 
 path = sys.argv[1]
 with io.open(path, 'r', encoding='utf-8') as fh:
     text = fh.read()
 
-legacy_guard = """            if (!is_null($a)) {\n                if (strpos($a->channel, 'Agent/') === 0) {\n                    $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.\n                        $params['Peer'].' asociado a '.$a->channel.' - conservando sesion legacy...');\n                    return;\n                }\n                // La extensión usada para login se ha desregistrado - deslogonear al agente\n                $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.\n                    $params['Peer'].' - deslogoneando '.$a->channel.'...');\n                $a->forzarLogoffAgente($this->_ami, $this->_log);\n            }\n"""
+method_start = text.find('public function msg_PeerStatus')
+if method_start == -1:
+    raise SystemExit('Unable to locate AMIEventProcess::msg_PeerStatus')
 
-original = """            if (!is_null($a)) {\n                // La extensión usada para login se ha desregistrado - deslogonear al agente\n                $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.\n                    $params['Peer'].' - deslogoneando '.$a->channel.'...');\n                $a->forzarLogoffAgente($this->_ami, $this->_log);\n            }\n"""
+next_method = text.find('\n    public function ', method_start + 1)
+if next_method == -1:
+    next_method = len(text)
 
-if legacy_guard in text:
+method_text = text[method_start:next_method]
+guard_marker = 'conservando sesion legacy...'
+if guard_marker in method_text:
     sys.exit(0)
 
-if original not in text:
-    raise SystemExit('Unable to locate AMIEventProcess PeerStatus logoff block')
+lines = method_text.splitlines(True)
+target_idx = None
+for idx, line in enumerate(lines):
+    if '$a->forzarLogoffAgente($this->_ami, $this->_log);' in line:
+        target_idx = idx
+        break
 
-text = text.replace(original, legacy_guard, 1)
+if target_idx is None:
+    raise SystemExit('Unable to locate AMIEventProcess PeerStatus logoff call')
+
+start_idx = None
+for idx in range(target_idx, -1, -1):
+    if "if (!is_null($a)) {" in lines[idx]:
+        start_idx = idx
+        break
+
+if start_idx is None:
+    raise SystemExit('Unable to locate AMIEventProcess PeerStatus logoff block start')
+
+end_idx = None
+for idx in range(target_idx + 1, min(len(lines), target_idx + 5)):
+    if re.match(r'^\s*\}\s*$', lines[idx]):
+        end_idx = idx
+        break
+
+if end_idx is None:
+    raise SystemExit('Unable to locate AMIEventProcess PeerStatus logoff block end')
+
+indent = re.match(r'(\s*)', lines[start_idx]).group(1)
+guard_block = """{indent}if (!is_null($a)) {{
+{indent}    if (strpos($a->channel, 'Agent/') === 0) {{
+{indent}        $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.
+{indent}            $params['Peer'].' asociado a '.$a->channel.' - conservando sesion legacy...');
+{indent}        return;
+{indent}    }}
+{indent}    // La extension usada para login se ha desregistrado - deslogonear al agente
+{indent}    $this->_log->output('INFO: '.__METHOD__.' se detecta desregistro de '.
+{indent}        $params['Peer'].' - deslogoneando '.$a->channel.'...');
+{indent}    $a->forzarLogoffAgente($this->_ami, $this->_log);
+{indent}}}
+""".format(indent=indent)
+
+lines[start_idx:end_idx + 1] = [guard_block]
+text = text[:method_start] + ''.join(lines) + text[next_method:]
 
 with io.open(path, 'w', encoding='utf-8') as fh:
     fh.write(text)
