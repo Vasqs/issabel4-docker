@@ -164,6 +164,56 @@ Build-time selections are stored in the wizard artifacts:
 - `.build/install.env`
 - `.env` is regenerated from those artifacts for Compose compatibility
 
+### NewIvr Keycloak SSO
+
+`overlays/NewIvr` requires Keycloak for the `/NewIvr` PHP surface. In
+homologation, Keycloak is provisioned by `scripts/sync-workspace.sh` through the
+`overlays/NewIvr/hooks/apply.sh` hook, not as a separate Compose service. The
+hook installs a local JRE and Keycloak distribution under `/opt/newivr/keycloak`,
+imports `overlays/NewIvr/keycloak/newivr-realm.json`, starts Keycloak on
+`127.0.0.1:18080`, writes `/etc/newivr/keycloak.env`, and ensures homologation
+users exist in `call_center.app_ivr_users`.
+
+The overlay uses an Apache `auto_prepend_file` guard so direct PHP entrypoints
+under `/NewIvr`, including `dasch/`, `report/`, and `auth/`, run only after a
+valid Keycloak-backed PHP session exists.
+
+Required runtime variables:
+
+- `NEWIVR_KEYCLOAK_ISSUER`, default homologation value `http://127.0.0.1:18080/realms/newivr`
+- `NEWIVR_KEYCLOAK_CLIENT_ID`, default `newivr`
+- `NEWIVR_KEYCLOAK_CLIENT_SECRET`, default homologation value `newivr-hml-secret`
+
+Optional variables:
+
+- `NEWIVR_KEYCLOAK_SCOPES`, default `openid profile email`
+- `NEWIVR_KEYCLOAK_REDIRECT_URI`, default `/NewIvr/keycloak_callback.php` on the current host
+- `NEWIVR_KEYCLOAK_POST_LOGOUT_REDIRECT_URIS`, Keycloak client logout redirects separated by `##`
+- `NEWIVR_KEYCLOAK_ADMIN_ROLE`, default `newivr-admin`
+- `NEWIVR_KEYCLOAK_AGENT_ROLE`, default `newivr-agente`
+- `NEWIVR_SESSION_TIMEOUT`, default `3600`
+- `NEWIVR_DB_HOST`, `NEWIVR_DB_NAME`, `NEWIVR_DB_USER`, and `NEWIVR_DB_PASS`
+
+The Keycloak client must allow the redirect URI ending in
+`/NewIvr/keycloak_callback.php` and the post-logout redirect ending in
+`/NewIvr/login.php`. NewIvr stores the OIDC `id_token` in the PHP session and
+sends it to Keycloak logout as `id_token_hint`. The authenticated token must include
+`preferred_username`; that value is matched against `app_ivr_users.username`,
+and the local user must have `status='active'`. Authorization is taken from
+Keycloak roles: `newivr-admin` maps to `profile_id=1`, `newivr-agente` maps to
+`profile_id=6`, and users without one of those roles are denied.
+
+`/NewIvr/login.php` starts the Keycloak authorization flow directly when there is
+no active session. `/NewIvr/auth/users/index.php` remains the operational user
+screen for `app_ivr_users`; create, update, and delete actions call the Keycloak
+admin API first and then update the local table. `profile_id=1` assigns
+`newivr-admin`; every other NewIvr profile assigns `newivr-agente`.
+
+Homologation users imported by the overlay:
+
+- `admin` / `Admin123!` with `newivr-admin`
+- `agente` / `Agente123!` with `newivr-agente`
+
 ## Endpoints
 
 Bridge mode endpoints:
