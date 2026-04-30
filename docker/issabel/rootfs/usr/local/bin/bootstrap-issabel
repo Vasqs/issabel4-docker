@@ -195,6 +195,17 @@ start_callcenter() {
   return 1
 }
 
+start_newivr_keycloak() {
+  if [ ! -x /usr/local/bin/newivr-keycloak ]; then
+    return 0
+  fi
+
+  /usr/local/bin/newivr-keycloak start >/var/log/newivr-keycloak-startup.log 2>&1 || {
+    echo "NewIvr Keycloak did not start; see /var/log/newivr-keycloak-startup.log" >&2
+    return 1
+  }
+}
+
 monitor_services() {
   while true; do
     if ! kill -0 "$MARIADB_PID" 2>/dev/null; then
@@ -242,6 +253,7 @@ main() {
   start_mariadb
   /usr/local/bin/issabel-firstboot
   start_httpd
+  start_newivr_keycloak
   start_asterisk
   refresh_pbx_runtime
   if [ "${ISSABEL_DISABLE_MOH:-${ISSABEL_INSTALL_DISABLE_MOH:-0}}" = "1" ] || \

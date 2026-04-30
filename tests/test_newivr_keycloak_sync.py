@@ -29,8 +29,25 @@ class NewIvrKeycloakSyncTests(unittest.TestCase):
         self.assertIn("app_ivr_users", text)
         self.assertIn("post.logout.redirect.uris", text)
         self.assertIn("configure_keycloak_client", text)
+        self.assertIn("newivr-keycloak start", text)
         self.assertNotIn("docker run", text)
         self.assertNotIn("docker compose", text)
+
+    def test_bootstrap_restarts_sync_managed_keycloak_after_container_restart(self) -> None:
+        runner = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "newivr-keycloak"
+        bootstrap = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "bootstrap-issabel"
+        dockerfile = ROOT / "docker" / "issabel" / "Dockerfile"
+
+        self.assertTrue(runner.exists())
+        runner_text = runner.read_text()
+        bootstrap_text = bootstrap.read_text()
+        dockerfile_text = dockerfile.read_text()
+
+        self.assertIn("/etc/newivr/keycloak.env", runner_text)
+        self.assertIn("/opt/newivr/keycloak", runner_text)
+        self.assertIn("start-dev", runner_text)
+        self.assertIn("newivr-keycloak start", bootstrap_text)
+        self.assertIn("newivr-keycloak", dockerfile_text)
 
     def test_realm_import_defines_client_roles_and_homologation_users(self) -> None:
         realm_path = ROOT / "overlays" / "NewIvr" / "keycloak" / "newivr-realm.json"
