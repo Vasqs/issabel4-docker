@@ -214,6 +214,48 @@ Homologation users imported by the overlay:
 - `admin` / `Admin123!` with `newivr-admin`
 - `agente` / `Agente123!` with `newivr-agente`
 
+### NewIvr WhatsApp Providers
+
+`overlays/NewIvr` keeps the legacy Whaticket/GrupoFacilita WhatsApp path but now
+adds provider-aware routing for Z-API. The overlay hook provisions the
+additional columns idempotently:
+
+- `call_center.whatssconfig.provider_key`, default `whaticket`
+- `call_center.whatssconfig.credentials`, JSON stored as `TEXT`
+- `call_center.ura_configurations.whatsapp_api_id`
+
+Legacy records with an empty or missing `provider_key` are treated as
+`whaticket`, preserving the existing `url` plus `token` contract and
+`/api/messages/send` payload. In the NewIvr admin screen, Z-API records use a
+pre-filled `https://api.z-api.io` URL and authenticate with only Instance ID and
+Instance Token; Client Token is optional. They store:
+
+```json
+{
+  "base_url": "https://api.z-api.io",
+  "instance_id": "instance-id",
+  "instance_token": "instance-token",
+  "client_token": "optional-client-token"
+}
+```
+
+The shared PHP 5.4-compatible helper is
+`/var/www/html/NewIvr/dasch/whatsapp_provider_helper.php`. `whatss2.php`
+continues to support the old CLI call with five arguments. When a sixth
+`config_id` argument is passed, it loads `whatssconfig`, resolves the provider,
+and sends through the configured driver.
+
+The Z-API v1 scope is text send plus status check:
+
+- `POST /instances/{instance_id}/token/{instance_token}/send-text`
+- `GET /instances/{instance_id}/token/{instance_token}/status`
+- `Client-Token` is sent only when `client_token` is configured
+
+The URA builder persists the selected WhatsApp config as `whatsapp_api_id` and
+passes it to the WhatsApp AGI call. Webhooks, campaign metrics, media, buttons,
+LID tracking, opt-out, and analytics from the Laravel painel implementation are
+not part of this NewIvr cycle.
+
 ## Endpoints
 
 Bridge mode endpoints:
@@ -329,6 +371,12 @@ Operational rules:
 - the one-click `Logar` flow may include a technical bootstrap call for
   campaign activation; it is expected to be handled through the bridge and the
   painel Janus bootstrap path rather than by a manual second click
+- `callcenter_bridge` relay should not run at `1s` cadence by default. The
+  supported baseline is `3s`, with `CALLCENTER_BRIDGE_RELAY_INTERVAL_SECONDS`
+  used only when operations intentionally need a different polling interval.
+- if the bridge shows `logging`, validate `queue_log` and the bridge `status`
+  before assuming login failure; the bridge no longer blocks the HTTP login
+  response waiting for the technical confirmation channel
 
 For production SIP or Janus validation, run the same commands with `ISSABEL_COMPOSE_MODE=hostnet` and confirm there are no Docker-published SIP or RTP ports in the selected compose file.
 

@@ -4,11 +4,13 @@
  * Compatível com PHP 5 e MariaDB 5.5
  */
 
+require_once dirname(dirname(__DIR__)) . '/includes/keycloak_guard.php';
+
 class Database {
-    private $host = '84.247.129.202';
+    private $host = 'localhost';
     private $db_name = 'call_center';
-    private $username = 'Marco';
-    private $password = ''; // Senha vazia conforme especificado
+    private $username = 'asterisk';
+    private $password = 'asterisk';
     public $conn;
 
     public function getConnection() {

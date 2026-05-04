@@ -31,10 +31,73 @@ function newivr_env($name, $default = '') {
     return $value;
 }
 
+function newivr_parse_env_file($path) {
+    $values = array();
+    if (!is_readable($path)) {
+        return $values;
+    }
+
+    $lines = file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        $line = trim($line);
+        if ($line === '' || strpos($line, '#') === 0 || strpos($line, '=') === false) {
+            continue;
+        }
+        list($key, $file_value) = explode('=', $line, 2);
+        $values[trim($key)] = trim($file_value, " \t\n\r\0\x0B\"'");
+    }
+
+    return $values;
+}
+
+function newivr_issabel_config() {
+    static $config = null;
+    if ($config !== null) {
+        return $config;
+    }
+
+    $config = array();
+    $paths = array('/etc/issabel.conf', dirname(dirname(dirname(__DIR__))) . '/.env');
+    foreach ($paths as $path) {
+        $config = array_merge($config, newivr_parse_env_file($path));
+    }
+
+    return $config;
+}
+
+function newivr_issabel_value($keys, $default = '') {
+    $config = newivr_issabel_config();
+    foreach ((array)$keys as $key) {
+        if (isset($config[$key]) && $config[$key] !== '') {
+            return $config[$key];
+        }
+    }
+    return $default;
+}
+
 function newivr_session_start() {
     if (session_id() === '') {
         session_start();
     }
+}
+
+function newivr_csrf_token() {
+    newivr_session_start();
+    if (empty($_SESSION['newivr_csrf_token'])) {
+        $_SESSION['newivr_csrf_token'] = newivr_random_token();
+    }
+    return $_SESSION['newivr_csrf_token'];
+}
+
+function newivr_verify_csrf_token($token) {
+    newivr_session_start();
+    if (!isset($_SESSION['newivr_csrf_token']) || !is_string($token) || $token === '') {
+        return false;
+    }
+    if (function_exists('hash_equals')) {
+        return hash_equals($_SESSION['newivr_csrf_token'], $token);
+    }
+    return $_SESSION['newivr_csrf_token'] === $token;
 }
 
 function newivr_is_ajax_request() {
@@ -90,10 +153,17 @@ function newivr_base_url() {
 
 function newivr_keycloak_config() {
     $issuer = rtrim(newivr_env('NEWIVR_KEYCLOAK_ISSUER'), '/');
+    if ($issuer === '') {
+        $http_host = newivr_env('NEWIVR_KEYCLOAK_HTTP_HOST', '127.0.0.1');
+        $http_port = newivr_env('NEWIVR_KEYCLOAK_HTTP_PORT', '18080');
+        if ($http_host !== '' && $http_port !== '') {
+            $issuer = 'http://' . $http_host . ':' . $http_port . '/realms/newivr';
+        }
+    }
     return array(
         'issuer' => $issuer,
         'client_id' => newivr_env('NEWIVR_KEYCLOAK_CLIENT_ID', 'newivr'),
-        'client_secret' => newivr_env('NEWIVR_KEYCLOAK_CLIENT_SECRET'),
+        'client_secret' => newivr_env('NEWIVR_KEYCLOAK_CLIENT_SECRET', 'newivr-hml-secret'),
         'scopes' => newivr_env('NEWIVR_KEYCLOAK_SCOPES', 'openid profile email'),
         'admin_role' => newivr_env('NEWIVR_KEYCLOAK_ADMIN_ROLE', 'newivr-admin'),
         'agent_role' => newivr_env('NEWIVR_KEYCLOAK_AGENT_ROLE', 'newivr-agente'),
@@ -103,11 +173,79 @@ function newivr_keycloak_config() {
 }
 
 function newivr_db_config() {
+    $host = newivr_env('NEWIVR_DB_HOST');
+    if ($host === '') {
+        $host = newivr_issabel_value(array('NEWIVR_DB_HOST', 'ISSABEL_CALLCENTER_DB_HOST', 'MYSQLHOST', 'mysqlhost'), 'localhost');
+    }
+
+    $name = newivr_env('NEWIVR_DB_NAME');
+    if ($name === '') {
+        $name = newivr_issabel_value(array('NEWIVR_DB_NAME', 'ISSABEL_CALLCENTER_DB_NAME', 'ISSABEL_CALLCENTER_DB_DATABASE', 'MYSQLDATABASE', 'mysqldbname'), 'call_center');
+    }
+
+    $user = newivr_env('NEWIVR_DB_USER');
+    if ($user === '') {
+        $user = newivr_issabel_value(array('NEWIVR_DB_USER', 'ISSABEL_CALLCENTER_DB_USER', 'MYSQLUSER', 'mysqluser'), 'asterisk');
+    }
+
+    $pass = newivr_env('NEWIVR_DB_PASS');
+    if ($pass === '') {
+        $pass = newivr_issabel_value(array('NEWIVR_DB_PASS', 'ISSABEL_CALLCENTER_DB_PASSWORD', 'MYSQLPASSWORD', 'mysqlpwd'), 'asterisk');
+    }
+
     return array(
-        'host' => newivr_env('NEWIVR_DB_HOST', '84.247.129.202'),
-        'name' => newivr_env('NEWIVR_DB_NAME', 'call_center'),
-        'user' => newivr_env('NEWIVR_DB_USER', 'Marco'),
-        'pass' => newivr_env('NEWIVR_DB_PASS', '')
+        'host' => $host,
+        'name' => $name,
+        'user' => $user,
+        'pass' => $pass
+    );
+}
+
+function newivr_pbx_db_config() {
+    return array(
+        'host' => newivr_issabel_value(array('ISSABEL_PBX_DB_HOST', 'AMPDBHOST', 'MYSQLHOST', 'mysqlhost'), 'localhost'),
+        'name' => newivr_issabel_value(array('ISSABEL_PBX_DB_NAME', 'ISSABEL_PBX_DB_DATABASE', 'AMPDBNAME'), 'asteriskcdrdb'),
+        'user' => newivr_issabel_value(array('ISSABEL_PBX_DB_USER', 'AMPDBUSER'), 'asteriskuser'),
+        'pass' => newivr_issabel_value(array('ISSABEL_PBX_DB_PASSWORD', 'AMPDBPASS'), 'amp109')
+    );
+}
+
+function newivr_asterisk_db_config() {
+    return array(
+        'host' => newivr_issabel_value(array('ISSABEL_ASTERISK_DB_HOST', 'ISSABEL_PBX_DB_HOST', 'AMPDBHOST', 'MYSQLHOST', 'mysqlhost'), 'localhost'),
+        'name' => newivr_issabel_value(array('ISSABEL_ASTERISK_DB_NAME', 'ISSABEL_PBX_DIALPLAN_DB_NAME'), 'asterisk'),
+        'user' => newivr_issabel_value(array('ISSABEL_ASTERISK_DB_USER', 'ISSABEL_PBX_DB_USER', 'AMPDBUSER'), 'asteriskuser'),
+        'pass' => newivr_issabel_value(array('ISSABEL_ASTERISK_DB_PASSWORD', 'ISSABEL_PBX_DB_PASSWORD', 'AMPDBPASS'), 'amp109')
+    );
+}
+
+function newivr_webphone_config() {
+    $base_url = newivr_env('NEWIVR_WEBPHONE_BASE_URL');
+    if ($base_url === '') {
+        $public_base = newivr_issabel_value(array('NEWIVR_PUBLIC_BASE_URL'), '');
+        if ($public_base === '') {
+            $redirect_uri = newivr_env('NEWIVR_KEYCLOAK_REDIRECT_URI');
+            if ($redirect_uri !== '' && substr($redirect_uri, -22) === '/keycloak_callback.php') {
+                $public_base = substr($redirect_uri, 0, -22);
+            }
+        }
+        if ($public_base === '') {
+            $public_base = newivr_base_url();
+        }
+        $base_url = rtrim($public_base, '/') . '/webphonemonitor/index.php';
+    }
+
+    $server = newivr_env('NEWIVR_WEBPHONE_SERVER');
+    if ($server === '') {
+        $server = parse_url($base_url, PHP_URL_HOST);
+    }
+
+    return array(
+        'base_url' => $base_url,
+        'server' => $server !== null ? $server : '',
+        'secret' => newivr_env('NEWIVR_WEBPHONE_SECRET'),
+        'port' => newivr_env('NEWIVR_WEBPHONE_PORT', '8089'),
+        'user' => newivr_env('NEWIVR_WEBPHONE_USER', 'agente')
     );
 }
 
@@ -406,7 +544,33 @@ function newivr_require_authentication() {
     newivr_redirect('/NewIvr/keycloak_login.php');
 }
 
-if (PHP_SAPI !== 'cli' && !newivr_is_public_page()) {
+function newivr_require_admin_session() {
+    newivr_require_authentication();
+    newivr_session_start();
+    if (!isset($_SESSION['profile_id']) || (int)$_SESSION['profile_id'] !== 1) {
+        if (newivr_is_ajax_request()) {
+            newivr_json_response(403, array('success' => false, 'error' => 'forbidden'));
+        }
+        http_response_code(403);
+        echo 'Acesso negado';
+        exit;
+    }
+    session_write_close();
+}
+
+function newivr_require_admin_post_csrf() {
+    newivr_require_admin_session();
+    $method = isset($_SERVER['REQUEST_METHOD']) ? strtoupper($_SERVER['REQUEST_METHOD']) : '';
+    if ($method !== 'POST') {
+        newivr_json_response(405, array('success' => false, 'error' => 'method_not_allowed'));
+    }
+    $token = isset($_POST['csrf_token']) ? $_POST['csrf_token'] : '';
+    if (!newivr_verify_csrf_token($token)) {
+        newivr_json_response(403, array('success' => false, 'error' => 'invalid_csrf'));
+    }
+}
+
+if (PHP_SAPI !== 'cli' && !defined('NEWIVR_SKIP_AUTH_BOOTSTRAP') && !newivr_is_public_page()) {
     newivr_require_authentication();
 }
 ?>

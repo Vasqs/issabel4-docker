@@ -27,6 +27,52 @@ KEYCLOAK_POST_LOGOUT_REDIRECT_URIS="${NEWIVR_KEYCLOAK_POST_LOGOUT_REDIRECT_URIS:
 KEYCLOAK_CLIENT_ID="${NEWIVR_KEYCLOAK_CLIENT_ID:-newivr}"
 KEYCLOAK_CLIENT_SECRET="${NEWIVR_KEYCLOAK_CLIENT_SECRET:-newivr-hml-secret}"
 
+workspace_env_value() {
+  local name="$1"
+  local path="${OVERLAY_ROOT:-/workspace/overlays/NewIvr}/../../.env"
+
+  [ -r "$path" ] || return 1
+
+  awk -F= -v key="$name" '
+    $1 == key {
+      sub(/^[^=]*=/, "");
+      gsub(/^["'\''"]|["'\''"]$/, "");
+      print;
+      exit;
+    }
+  ' "$path"
+}
+
+resolve_db_value() {
+  local current_value="$1"
+  local fallback_env_name="$2"
+  local default_value="$3"
+  local resolved=""
+
+  if [ -n "$current_value" ]; then
+    printf '%s\n' "$current_value"
+    return 0
+  fi
+
+  resolved="$(workspace_env_value "$fallback_env_name" 2>/dev/null || true)"
+  if [ -n "$resolved" ]; then
+    printf '%s\n' "$resolved"
+    return 0
+  fi
+
+  printf '%s\n' "$default_value"
+}
+
+NEWIVR_DB_HOST_VALUE="$(resolve_db_value "${NEWIVR_DB_HOST:-}" "ISSABEL_CALLCENTER_DB_HOST" "localhost")"
+NEWIVR_DB_NAME_VALUE="$(resolve_db_value "${NEWIVR_DB_NAME:-}" "ISSABEL_CALLCENTER_DB_NAME" "call_center")"
+NEWIVR_DB_USER_VALUE="$(resolve_db_value "${NEWIVR_DB_USER:-}" "ISSABEL_CALLCENTER_DB_USER" "asterisk")"
+NEWIVR_DB_PASS_VALUE="$(resolve_db_value "${NEWIVR_DB_PASS:-}" "ISSABEL_CALLCENTER_DB_PASSWORD" "asterisk")"
+
+validate_db_identifier() {
+  local value="$1"
+  [[ "$value" =~ ^[A-Za-z0-9_]+$ ]]
+}
+
 mkdir -p "$DOWNLOAD_DIR" "$RUN_DIR" "$LOG_DIR" "$ENV_DIR"
 
 download_once() {
@@ -79,8 +125,13 @@ NEWIVR_KEYCLOAK_ADMIN_PASSWORD=${NEWIVR_KEYCLOAK_ADMIN_PASSWORD:-DevKeycloak123}
 NEWIVR_KEYCLOAK_ADMIN_ROLE=newivr-admin
 NEWIVR_KEYCLOAK_AGENT_ROLE=newivr-agente
 NEWIVR_SESSION_TIMEOUT=3600
+NEWIVR_DB_HOST=${NEWIVR_DB_HOST_VALUE}
+NEWIVR_DB_NAME=${NEWIVR_DB_NAME_VALUE}
+NEWIVR_DB_USER=${NEWIVR_DB_USER_VALUE}
+NEWIVR_DB_PASS=${NEWIVR_DB_PASS_VALUE}
 EOF
-  chmod 0644 "$ENV_FILE"
+  chown root:apache "$ENV_FILE"
+  chmod 0640 "$ENV_FILE"
 }
 
 install_apache_override() {
@@ -95,14 +146,18 @@ EOF
 
 ensure_local_users() {
   local mysql_root_password=""
+  local db_name="${NEWIVR_DB_NAME_VALUE}"
+
+  validate_db_identifier "$db_name" || return 1
+
   if [ -f /etc/issabel.conf ]; then
     mysql_root_password="$(awk -F= '$1 == "mysqlrootpwd" {print $2; exit}' /etc/issabel.conf)"
   fi
   [ -n "$mysql_root_password" ] || return 0
 
-  mysql --socket="${MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}" -uroot --password="$mysql_root_password" <<'SQL'
-CREATE DATABASE IF NOT EXISTS call_center DEFAULT CHARACTER SET utf8;
-CREATE TABLE IF NOT EXISTS call_center.app_ivr_users (
+  mysql --socket="${MYSQL_SOCKET:-/var/lib/mysql/mysql.sock}" -uroot --password="$mysql_root_password" <<SQL
+CREATE DATABASE IF NOT EXISTS \`${db_name}\` DEFAULT CHARACTER SET utf8;
+CREATE TABLE IF NOT EXISTS \`${db_name}\`.app_ivr_users (
   id INT AUTO_INCREMENT PRIMARY KEY,
   username VARCHAR(100) NOT NULL UNIQUE,
   password VARCHAR(255) NULL,
@@ -119,7 +174,7 @@ CREATE TABLE IF NOT EXISTS call_center.app_ivr_users (
   created_at DATETIME NULL,
   updated_at DATETIME NULL
 ) DEFAULT CHARSET=utf8;
-INSERT INTO call_center.app_ivr_users
+INSERT INTO \`${db_name}\`.app_ivr_users
   (username,password,full_name,email,profile_id,status,extension,Empresa,created_at,updated_at)
 VALUES
   ('admin','keycloak','NewIvr Admin','admin@newivr.local',1,'active','1001','Homologacao',NOW(),NOW()),
