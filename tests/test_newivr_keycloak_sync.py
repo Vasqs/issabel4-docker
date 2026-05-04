@@ -1,4 +1,5 @@
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -25,8 +26,17 @@ class NewIvrKeycloakSyncTests(unittest.TestCase):
         self.assertIn("/opt/newivr/keycloak", text)
         self.assertIn("/etc/newivr/keycloak.env", text)
         self.assertIn("127.0.0.1", text)
+        self.assertIn("KEYCLOAK_HTTP_BIND_HOST", text)
         self.assertIn("18080", text)
+        self.assertIn("app_ivr_profiles", text)
+        self.assertIn("Administrador", text)
+        self.assertIn("Agente", text)
+        self.assertIn("permissions TEXT NULL", text)
+        self.assertRegex(text, re.compile(r"\(1,'Administrador'.*?\)", re.DOTALL))
+        self.assertRegex(text, re.compile(r"\(6,'Agente'.*?\)", re.DOTALL))
+        self.assertIn("profile_id=VALUES(profile_id)", text)
         self.assertIn("app_ivr_users", text)
+        self.assertLess(text.rindex("ensure_local_users"), text.rindex("require_keycloak_config"))
         self.assertIn("post.logout.redirect.uris", text)
         self.assertIn("configure_keycloak_client", text)
         self.assertIn("newivr-keycloak start", text)
@@ -61,20 +71,18 @@ class NewIvrKeycloakSyncTests(unittest.TestCase):
 
         client = next((item for item in realm["clients"] if item["clientId"] == "newivr"), None)
         self.assertIsNotNone(client)
-        self.assertEqual(client["secret"], "newivr-hml-secret")
+        self.assertNotIn("secret", client, "client secret must be injected from env by the hook")
+        self.assertFalse(client["directAccessGrantsEnabled"])
         self.assertIn("https://127.0.0.1:8443/NewIvr/keycloak_callback.php", client["redirectUris"])
         self.assertIn("post.logout.redirect.uris", client["attributes"])
         self.assertIn("https://127.0.0.1:8443/NewIvr/login.php", client["attributes"]["post.logout.redirect.uris"])
 
-        users = {user["username"]: user for user in realm["users"]}
-        self.assertIn("admin", users)
-        self.assertIn("agente", users)
-        self.assertIn("newivr-admin", users["admin"]["realmRoles"])
-        self.assertIn("newivr-agente", users["agente"]["realmRoles"])
+        self.assertNotIn("users", realm, "realm import must not ship default user passwords")
 
     def test_env_points_newivr_to_sync_managed_keycloak(self) -> None:
         env_text = (ROOT / ".env").read_text()
         self.assertIn("NEWIVR_KEYCLOAK_ISSUER=http://127.0.0.1:18080/realms/newivr", env_text)
-        self.assertIn("NEWIVR_KEYCLOAK_CLIENT_SECRET=newivr-hml-secret", env_text)
+        self.assertIn("NEWIVR_KEYCLOAK_HTTP_BIND_HOST=", env_text)
+        self.assertIn("NEWIVR_KEYCLOAK_CLIENT_SECRET=", env_text)
         self.assertIn("NEWIVR_KEYCLOAK_REDIRECT_URI=https://127.0.0.1:8443/NewIvr/keycloak_callback.php", env_text)
         self.assertIn("NEWIVR_KEYCLOAK_POST_LOGOUT_REDIRECT_URIS=https://127.0.0.1:8443/NewIvr/login.php", env_text)

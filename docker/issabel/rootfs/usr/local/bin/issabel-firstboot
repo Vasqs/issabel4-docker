@@ -275,6 +275,7 @@ detect_public_ipv4() {
   if command -v python >/dev/null 2>&1; then
     ip="$(python - <<'PY' 2>/dev/null || true
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import sys
 import urllib.request
 
@@ -388,6 +389,7 @@ reconcile_http_redirect_port() {
   [ -f "$file_path" ] || return 0
   python - "$file_path" "$HTTPS_REDIRECT_PORT" <<'PY'
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import io
 import sys
 
@@ -399,6 +401,9 @@ original = """    RewriteCond %{HTTPS} off
     RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI}
 """
 replacement = """    RewriteCond %%{HTTPS} off
+    RewriteCond %%{REMOTE_ADDR} !^127\\.0\\.0\\.1$
+    RewriteCond %%{REMOTE_ADDR} !^::1$
+    RewriteCond %%{HTTP_HOST} !^(localhost|127\\.0\\.0\\.1)(?::\\d+)?$ [NC]
     RewriteCond %%{HTTP_HOST} ^([^:]+)(?::\\d+)?$
     RewriteRule (.*) https://%%1:%s%%{REQUEST_URI}
 """ % https_port
@@ -420,6 +425,7 @@ reconcile_manager_secret() {
 
   python - "$file_path" "$ami_user" "$ami_password" "$read_permissions" "$write_permissions" <<'PY'
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import io
 import sys
 
@@ -528,6 +534,7 @@ reconcile_manager_general_settings() {
 
   python - "$file_path" <<'PY'
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import io
 import sys
 
@@ -624,6 +631,7 @@ reconcile_callcenter_peerstatus_logoff() {
 
   python - "$file_path" <<'PY'
 # -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import io
 import re
 import sys
@@ -701,6 +709,8 @@ reconcile_callcenter_agentscomplete_logoff() {
   [ -f "$file_path" ] || return 0
 
   python - "$file_path" <<'PY'
+# -*- coding: utf-8 -*-
+from __future__ import unicode_literals
 import io
 import re
 import sys

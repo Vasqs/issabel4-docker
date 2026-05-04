@@ -32,6 +32,28 @@ This project packages Issabel 4 for Docker-based development, lab validation and
 - [`scripts/sync-workspace.sh`](/home/vasqs/Projetos/Issabel/scripts/sync-workspace.sh): sync local modules and integrations
 - [`docs/operations.md`](/home/vasqs/Projetos/Issabel/docs/operations.md): full operational runbook
 
+## Repository boundaries
+
+This workspace is both:
+
+- a monorepo for Docker, bootstrap, sync, and runtime integration
+- a host workspace for standalone projects that live under `modules/` and `overlays/`
+
+Ownership rules:
+
+- changes to the root repo belong to `issabel4-docker`
+- changes inside standalone projects under `modules/` or `overlays/` belong to those projects, not to the monorepo
+- validation can use this monorepo runtime even when the source of truth is a standalone project
+- publication must happen from the owning repository, never from the monorepo root
+
+Operational rule before opening a PR:
+
+1. confirm `git rev-parse --show-toplevel`
+2. confirm `git remote -v`
+3. confirm whether the target file belongs to the monorepo or to a standalone project
+
+The root `.gitignore` intentionally ignores `modules/*` and `overlays/*` so local standalone work does not leak into monorepo status, staging, or publication by accident.
+
 ## Prerequisites
 
 - Docker daemon running locally
