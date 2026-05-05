@@ -380,6 +380,39 @@ Operational rules:
 
 For production SIP or Janus validation, run the same commands with `ISSABEL_COMPOSE_MODE=hostnet` and confirm there are no Docker-published SIP or RTP ports in the selected compose file.
 
+### Campaign calls failing before queue delivery
+
+When the dialer logs repeated `Phone call ... failed to be placed`, first prove
+whether the failure is before queue delivery. In that case the agent can be
+online and the voice-bar can be healthy while the provider rejects the outbound
+leg.
+
+Use the Issabel container as the source of truth:
+
+```bash
+docker exec issabel-dev asterisk -rx "sip show peer saida_89"
+docker exec issabel-dev asterisk -rx "core show channels concise"
+docker exec issabel-dev bash -lc "mysql -uasterisk -pasterisk -N -B call_center -e 'select id,id_campaign,phone,status,retries,failure_cause,failure_cause_txt,datetime_originate,trunk from calls where datetime_originate >= date_sub(now(), interval 20 minute) order by datetime_originate desc limit 30;'"
+docker exec issabel-dev bash -lc "timeout 12 tcpdump -nn -s0 -A host 181.191.206.44 and udp port 5060"
+```
+
+Known production signature from 2026-05-05:
+
+- `SIP/saida_89` peer was reachable with `OK`
+- campaign `fullconsig` (`id=4`) originated through `from-internal` / route
+  `outrt-2`
+- active channels fell into `macro-outisbusy` / `all-circuits-busy`
+- provider replied `SIP/2.0 402 Payment Required`
+- SIP reason was `Q.850 cause=21 Call Rejected`
+- `call_center.calls` stored `failure_cause=127` and
+  `failure_cause_txt=Interworking, unspecified`
+
+Interpretation: this is a trunk/provider/commercial/routing rejection before
+queue delivery, not a voice-bar, Reverb, browser, or agent-login failure. Future
+`callcenter_bridge` work should classify this as a structured
+`trunk_origination` failure and surface an operational alert or campaign pause
+recommendation when repeated failures are detected.
+
 ## Password rotation
 
 To rotate the Issabel web admin password:
