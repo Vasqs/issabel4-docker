@@ -32,6 +32,9 @@ KEYCLOAK_HTTP_HOST="${NEWIVR_KEYCLOAK_HTTP_HOST:-$(newivr_env_value NEWIVR_KEYCL
 KEYCLOAK_HTTP_BIND_HOST="${NEWIVR_KEYCLOAK_HTTP_BIND_HOST:-$(newivr_env_value NEWIVR_KEYCLOAK_HTTP_BIND_HOST "$KEYCLOAK_HTTP_HOST")}"
 KEYCLOAK_HTTP_PORT="${NEWIVR_KEYCLOAK_HTTP_PORT:-$(newivr_env_value NEWIVR_KEYCLOAK_HTTP_PORT 18080)}"
 KEYCLOAK_ISSUER="${NEWIVR_KEYCLOAK_ISSUER:-$(newivr_env_value NEWIVR_KEYCLOAK_ISSUER "http://${KEYCLOAK_HTTP_HOST}:${KEYCLOAK_HTTP_PORT}/realms/newivr")}"
+KEYCLOAK_INTERNAL_BASE_URL="${NEWIVR_KEYCLOAK_INTERNAL_BASE_URL:-$(newivr_env_value NEWIVR_KEYCLOAK_INTERNAL_BASE_URL "http://${KEYCLOAK_HTTP_HOST}:${KEYCLOAK_HTTP_PORT}")}"
+KEYCLOAK_HOSTNAME="${NEWIVR_KEYCLOAK_HOSTNAME:-$(newivr_env_value NEWIVR_KEYCLOAK_HOSTNAME "")}"
+KEYCLOAK_PROXY_HEADERS="${NEWIVR_KEYCLOAK_PROXY_HEADERS:-$(newivr_env_value NEWIVR_KEYCLOAK_PROXY_HEADERS "")}"
 KEYCLOAK_VERSION="${NEWIVR_KEYCLOAK_VERSION:-$(newivr_env_value NEWIVR_KEYCLOAK_VERSION "")}"
 KEYCLOAK_ADMIN_USER="${NEWIVR_KEYCLOAK_ADMIN_USER:-$(newivr_env_value NEWIVR_KEYCLOAK_ADMIN_USER admin)}"
 KEYCLOAK_ADMIN_PASSWORD="${NEWIVR_KEYCLOAK_ADMIN_PASSWORD:-$(newivr_env_value NEWIVR_KEYCLOAK_ADMIN_PASSWORD DevKeycloak123)}"
@@ -51,13 +54,49 @@ keycloak_is_installed() {
 }
 
 keycloak_is_running() {
-  curl -fsS "${KEYCLOAK_ISSUER}/.well-known/openid-configuration" >/dev/null 2>&1
+  curl -fsS "${KEYCLOAK_INTERNAL_BASE_URL}/realms/newivr/.well-known/openid-configuration" >/dev/null 2>&1
+}
+
+keycloak_pid() {
+  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" >/dev/null 2>&1; then
+    cat "$PID_FILE"
+    return 0
+  fi
+
+  pgrep -f 'keycloak.*start-dev' | head -n 1
+}
+
+keycloak_process_matches_config() {
+  local pid
+  local cmdline
+
+  pid="$(keycloak_pid || true)"
+  [ -n "$pid" ] || return 1
+  cmdline="$(tr '\0' ' ' <"/proc/${pid}/cmdline" 2>/dev/null || true)"
+
+  case "$cmdline" in
+    *"--http-host=${KEYCLOAK_HTTP_BIND_HOST}"*"--http-port=${KEYCLOAK_HTTP_PORT}"*) ;;
+    *) return 1 ;;
+  esac
+
+  if [ -n "$KEYCLOAK_HOSTNAME" ]; then
+    case "$cmdline" in *"--hostname=${KEYCLOAK_HOSTNAME}"*) ;; *) return 1 ;; esac
+  else
+    case "$cmdline" in *"--hostname="*) return 1 ;; esac
+  fi
+
+  if [ -n "$KEYCLOAK_PROXY_HEADERS" ]; then
+    case "$cmdline" in *"--proxy-headers=${KEYCLOAK_PROXY_HEADERS}"*) ;; *) return 1 ;; esac
+  else
+    case "$cmdline" in *"--proxy-headers="*) return 1 ;; esac
+  fi
 }
 
 start_keycloak() {
   local kc_dir
+  local current_pid
 
-  if keycloak_is_running; then
+  if keycloak_is_running && keycloak_process_matches_config; then
     return 0
   fi
 
@@ -68,8 +107,9 @@ start_keycloak() {
 
   mkdir -p "$RUN_DIR" "$LOG_DIR"
 
-  if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" >/dev/null 2>&1; then
-    kill "$(cat "$PID_FILE")" >/dev/null 2>&1 || true
+  current_pid="$(keycloak_pid || true)"
+  if [ -n "$current_pid" ]; then
+    kill "$current_pid" >/dev/null 2>&1 || true
     sleep 2
   fi
 
@@ -81,11 +121,22 @@ start_keycloak() {
   export KC_HTTP_ENABLED=true
   export KC_HOSTNAME_STRICT=false
 
-  nohup "${kc_dir}/bin/kc.sh" start-dev \
-    --import-realm \
-    --http-host="$KEYCLOAK_HTTP_BIND_HOST" \
-    --http-port="$KEYCLOAK_HTTP_PORT" \
-    --hostname-strict=false \
+  local keycloak_args=(
+    start-dev
+    --import-realm
+    --http-host="$KEYCLOAK_HTTP_BIND_HOST"
+    --http-port="$KEYCLOAK_HTTP_PORT"
+    --hostname-strict=false
+  )
+  if [ -n "$KEYCLOAK_HOSTNAME" ]; then
+    keycloak_args+=(--hostname="$KEYCLOAK_HOSTNAME")
+  fi
+  if [ -n "$KEYCLOAK_PROXY_HEADERS" ]; then
+    keycloak_args+=(--proxy-headers="$KEYCLOAK_PROXY_HEADERS")
+  fi
+
+  nohup "${kc_dir}/bin/kc.sh" \
+    "${keycloak_args[@]}" \
     >>"$LOG_FILE" 2>&1 &
   echo $! >"$PID_FILE"
 

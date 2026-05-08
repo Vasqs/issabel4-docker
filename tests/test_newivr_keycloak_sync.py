@@ -56,6 +56,12 @@ class NewIvrKeycloakSyncTests(unittest.TestCase):
         self.assertIn("/etc/newivr/keycloak.env", runner_text)
         self.assertIn("/opt/newivr/keycloak", runner_text)
         self.assertIn("start-dev", runner_text)
+        self.assertIn("NEWIVR_KEYCLOAK_INTERNAL_BASE_URL", runner_text)
+        self.assertIn("NEWIVR_KEYCLOAK_HOSTNAME", runner_text)
+        self.assertIn("NEWIVR_KEYCLOAK_PROXY_HEADERS", runner_text)
+        self.assertIn("keycloak_process_matches_config", runner_text)
+        self.assertIn('keycloak_args+=(--hostname="$KEYCLOAK_HOSTNAME")', runner_text)
+        self.assertIn('keycloak_args+=(--proxy-headers="$KEYCLOAK_PROXY_HEADERS")', runner_text)
         self.assertIn("newivr-keycloak start", bootstrap_text)
         self.assertIn("newivr-keycloak", dockerfile_text)
 
