@@ -724,6 +724,36 @@ class IssabelStackLayoutTests(unittest.TestCase):
             self.assertIn("conflict", result.stderr.lower())
             self.assertEqual((web_root / "index.php").read_text(), "core\n")
 
+    def test_sync_workspace_ignores_git_worktree_checkouts_under_overlays(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            workspace_root = tmp_root / "workspace"
+            web_root = tmp_root / "web-root"
+            modules_target = tmp_root / "published-modules"
+            state_root = tmp_root / "state"
+            canonical_overlay = workspace_root / "overlays" / "NewIvr"
+            helper_worktree = workspace_root / "overlays" / "NewIvr-admin-cli"
+
+            (canonical_overlay / ".git").mkdir(parents=True)
+            (canonical_overlay / "web_root" / "NewIvr").mkdir(parents=True)
+            (canonical_overlay / "web_root" / "NewIvr" / "aaaloader.php").write_text("canonical\n")
+
+            helper_worktree.mkdir(parents=True)
+            (helper_worktree / ".git").write_text(
+                "gitdir: /workspace/overlays/NewIvr/.git/worktrees/NewIvr-admin-cli\n"
+            )
+            (helper_worktree / "web_root" / "NewIvr").mkdir(parents=True)
+            (helper_worktree / "web_root" / "NewIvr" / "aaaloader.php").write_text("helper\n")
+
+            web_root.mkdir(parents=True)
+
+            result = self.run_sync_workspace(workspace_root, web_root, modules_target, state_root)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((web_root / "NewIvr" / "aaaloader.php").read_text(), "canonical\n")
+            self.assertTrue((state_root / "overlays" / "NewIvr").exists())
+            self.assertFalse((state_root / "overlays" / "NewIvr-admin-cli").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
