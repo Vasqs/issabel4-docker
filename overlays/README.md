@@ -25,6 +25,7 @@ overlays/<overlay-name>/
 - files created only by the overlay are removed when the overlay is removed
 - deleting the overlay directory and syncing restores the original core web files
 - conflicting overlays on the same `/var/www/html/<path>` abort the sync
+- Git worktree checkouts whose `.git` is a `gitdir:` file are ignored by sync; keep temporary branch worktrees there only when they are not intended to publish as active overlays
 - overlay state is persisted under `/var/lib/asterisk/issabel-module-state/overlays`
 
 ## Rules
