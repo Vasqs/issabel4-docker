@@ -201,11 +201,19 @@ snapshot_module_contract() {
 }
 
 list_overlays() {
+  local overlay_dir
+
   if [ ! -d "$OVERLAYS_SOURCE_ROOT" ]; then
     return 0
   fi
 
-  find "$OVERLAYS_SOURCE_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+  find "$OVERLAYS_SOURCE_ROOT" -mindepth 1 -maxdepth 1 -type d | sort | while IFS= read -r overlay_dir; do
+    [ -n "$overlay_dir" ] || continue
+    if [ -f "${overlay_dir}/.git" ] && grep -Eq '^gitdir:' "${overlay_dir}/.git"; then
+      continue
+    fi
+    basename "$overlay_dir"
+  done
 }
 
 overlay_source_root() {
