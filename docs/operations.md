@@ -164,6 +164,98 @@ Build-time selections are stored in the wizard artifacts:
 - `.build/install.env`
 - `.env` is regenerated from those artifacts for Compose compatibility
 
+### NewIvr Keycloak SSO
+
+`overlays/NewIvr` requires Keycloak for the `/NewIvr` PHP surface. In
+homologation, Keycloak is provisioned by `scripts/sync-workspace.sh` through the
+`overlays/NewIvr/hooks/apply.sh` hook, not as a separate Compose service. The
+hook installs a local JRE and Keycloak distribution under `/opt/newivr/keycloak`,
+imports `overlays/NewIvr/keycloak/newivr-realm.json`, starts Keycloak on
+`127.0.0.1:18080`, writes `/etc/newivr/keycloak.env`, and ensures homologation
+users exist in `call_center.app_ivr_users`.
+
+The overlay uses an Apache `auto_prepend_file` guard so direct PHP entrypoints
+under `/NewIvr`, including `dasch/`, `report/`, and `auth/`, run only after a
+valid Keycloak-backed PHP session exists.
+
+Required runtime variables:
+
+- `NEWIVR_KEYCLOAK_ISSUER`, default homologation value `http://127.0.0.1:18080/realms/newivr`
+- `NEWIVR_KEYCLOAK_CLIENT_ID`, default `newivr`
+- `NEWIVR_KEYCLOAK_CLIENT_SECRET`, default homologation value `newivr-hml-secret`
+
+Optional variables:
+
+- `NEWIVR_KEYCLOAK_SCOPES`, default `openid profile email`
+- `NEWIVR_KEYCLOAK_REDIRECT_URI`, default `/NewIvr/keycloak_callback.php` on the current host
+- `NEWIVR_KEYCLOAK_POST_LOGOUT_REDIRECT_URIS`, Keycloak client logout redirects separated by `##`
+- `NEWIVR_KEYCLOAK_ADMIN_ROLE`, default `newivr-admin`
+- `NEWIVR_KEYCLOAK_AGENT_ROLE`, default `newivr-agente`
+- `NEWIVR_SESSION_TIMEOUT`, default `3600`
+- `NEWIVR_DB_HOST`, `NEWIVR_DB_NAME`, `NEWIVR_DB_USER`, and `NEWIVR_DB_PASS`
+
+The Keycloak client must allow the redirect URI ending in
+`/NewIvr/keycloak_callback.php` and the post-logout redirect ending in
+`/NewIvr/login.php`. NewIvr stores the OIDC `id_token` in the PHP session and
+sends it to Keycloak logout as `id_token_hint`. The authenticated token must include
+`preferred_username`; that value is matched against `app_ivr_users.username`,
+and the local user must have `status='active'`. Authorization is taken from
+Keycloak roles: `newivr-admin` maps to `profile_id=1`, `newivr-agente` maps to
+`profile_id=6`, and users without one of those roles are denied.
+
+`/NewIvr/login.php` starts the Keycloak authorization flow directly when there is
+no active session. `/NewIvr/auth/users/index.php` remains the operational user
+screen for `app_ivr_users`; create, update, and delete actions call the Keycloak
+admin API first and then update the local table. `profile_id=1` assigns
+`newivr-admin`; every other NewIvr profile assigns `newivr-agente`.
+
+Homologation users imported by the overlay:
+
+- `admin` / `Admin123!` with `newivr-admin`
+- `agente` / `Agente123!` with `newivr-agente`
+
+### NewIvr WhatsApp Providers
+
+`overlays/NewIvr` keeps the legacy Whaticket/GrupoFacilita WhatsApp path but now
+adds provider-aware routing for Z-API. The overlay hook provisions the
+additional columns idempotently:
+
+- `call_center.whatssconfig.provider_key`, default `whaticket`
+- `call_center.whatssconfig.credentials`, JSON stored as `TEXT`
+- `call_center.ura_configurations.whatsapp_api_id`
+
+Legacy records with an empty or missing `provider_key` are treated as
+`whaticket`, preserving the existing `url` plus `token` contract and
+`/api/messages/send` payload. In the NewIvr admin screen, Z-API records use a
+pre-filled `https://api.z-api.io` URL and authenticate with only Instance ID and
+Instance Token; Client Token is optional. They store:
+
+```json
+{
+  "base_url": "https://api.z-api.io",
+  "instance_id": "instance-id",
+  "instance_token": "instance-token",
+  "client_token": "optional-client-token"
+}
+```
+
+The shared PHP 5.4-compatible helper is
+`/var/www/html/NewIvr/dasch/whatsapp_provider_helper.php`. `whatss2.php`
+continues to support the old CLI call with five arguments. When a sixth
+`config_id` argument is passed, it loads `whatssconfig`, resolves the provider,
+and sends through the configured driver.
+
+The Z-API v1 scope is text send plus status check:
+
+- `POST /instances/{instance_id}/token/{instance_token}/send-text`
+- `GET /instances/{instance_id}/token/{instance_token}/status`
+- `Client-Token` is sent only when `client_token` is configured
+
+The URA builder persists the selected WhatsApp config as `whatsapp_api_id` and
+passes it to the WhatsApp AGI call. Webhooks, campaign metrics, media, buttons,
+LID tracking, opt-out, and analytics from the Laravel painel implementation are
+not part of this NewIvr cycle.
+
 ## Endpoints
 
 Bridge mode endpoints:
@@ -279,8 +371,47 @@ Operational rules:
 - the one-click `Logar` flow may include a technical bootstrap call for
   campaign activation; it is expected to be handled through the bridge and the
   painel Janus bootstrap path rather than by a manual second click
+- `callcenter_bridge` relay should not run at `1s` cadence by default. The
+  supported baseline is `3s`, with `CALLCENTER_BRIDGE_RELAY_INTERVAL_SECONDS`
+  used only when operations intentionally need a different polling interval.
+- if the bridge shows `logging`, validate `queue_log` and the bridge `status`
+  before assuming login failure; the bridge no longer blocks the HTTP login
+  response waiting for the technical confirmation channel
 
 For production SIP or Janus validation, run the same commands with `ISSABEL_COMPOSE_MODE=hostnet` and confirm there are no Docker-published SIP or RTP ports in the selected compose file.
+
+### Campaign calls failing before queue delivery
+
+When the dialer logs repeated `Phone call ... failed to be placed`, first prove
+whether the failure is before queue delivery. In that case the agent can be
+online and the voice-bar can be healthy while the provider rejects the outbound
+leg.
+
+Use the Issabel container as the source of truth:
+
+```bash
+docker exec issabel-dev asterisk -rx "sip show peer saida_89"
+docker exec issabel-dev asterisk -rx "core show channels concise"
+docker exec issabel-dev bash -lc "mysql -uasterisk -pasterisk -N -B call_center -e 'select id,id_campaign,phone,status,retries,failure_cause,failure_cause_txt,datetime_originate,trunk from calls where datetime_originate >= date_sub(now(), interval 20 minute) order by datetime_originate desc limit 30;'"
+docker exec issabel-dev bash -lc "timeout 12 tcpdump -nn -s0 -A host 181.191.206.44 and udp port 5060"
+```
+
+Known production signature from 2026-05-05:
+
+- `SIP/saida_89` peer was reachable with `OK`
+- campaign `fullconsig` (`id=4`) originated through `from-internal` / route
+  `outrt-2`
+- active channels fell into `macro-outisbusy` / `all-circuits-busy`
+- provider replied `SIP/2.0 402 Payment Required`
+- SIP reason was `Q.850 cause=21 Call Rejected`
+- `call_center.calls` stored `failure_cause=127` and
+  `failure_cause_txt=Interworking, unspecified`
+
+Interpretation: this is a trunk/provider/commercial/routing rejection before
+queue delivery, not a voice-bar, Reverb, browser, or agent-login failure. Future
+`callcenter_bridge` work should classify this as a structured
+`trunk_origination` failure and surface an operational alert or campaign pause
+recommendation when repeated failures are detected.
 
 ## Password rotation
 

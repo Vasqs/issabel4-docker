@@ -301,6 +301,9 @@ run_hook() {
   local hook_file="$2"
   local hook_phase="$3"
   local effective_root="$4"
+  local target_root="${5:-}"
+  local state_root="${6:-}"
+  local runtime_root="${7:-}"
   local log_file
 
   [ -f "$hook_file" ] || return 0
@@ -309,11 +312,26 @@ run_hook() {
   log_file="${HOOK_LOG_DIR}/${module_name}-${hook_phase}.log"
   log "running ${hook_phase} hook for ${module_name}: ${hook_file}"
 
+  if [ -z "$target_root" ]; then
+    target_root="$(module_target_root "$module_name")"
+  fi
+  if [ -z "$state_root" ]; then
+    state_root="$(module_state_root "$module_name")"
+  fi
+  if [ -z "$runtime_root" ]; then
+    runtime_root="$(module_runtime_root "$module_name")"
+  fi
+
   MODULE_NAME="$module_name" \
   MODULE_ROOT="$effective_root" \
-  MODULE_TARGET_ROOT="$(module_target_root "$module_name")" \
-  MODULE_STATE_ROOT="$(module_state_root "$module_name")" \
-  MODULE_RUNTIME_ROOT="$(module_runtime_root "$module_name")" \
+  MODULE_TARGET_ROOT="$target_root" \
+  MODULE_STATE_ROOT="$state_root" \
+  MODULE_RUNTIME_ROOT="$runtime_root" \
+  OVERLAY_NAME="$module_name" \
+  OVERLAY_ROOT="$effective_root" \
+  OVERLAY_TARGET_ROOT="$target_root" \
+  OVERLAY_STATE_ROOT="$state_root" \
+  OVERLAY_RUNTIME_ROOT="$runtime_root" \
   MYSQL_SOCKET="$MYSQL_SOCKET" \
   MYSQL_ROOT_PASSWORD="$MYSQL_ROOT_PASSWORD" \
   bash "$hook_file" >>"$log_file" 2>&1
@@ -446,6 +464,15 @@ apply_overlay() {
     mkdir -p "$(dirname "$target_path")"
     cp -a "$overlay_file" "$target_path"
   done < <(list_overlay_files "$overlay_name")
+
+  run_hook \
+    "$overlay_name" \
+    "$(overlay_source_root "$overlay_name")/hooks/apply.sh" \
+    "overlay-apply" \
+    "$(overlay_source_root "$overlay_name")" \
+    "$WEB_ROOT_TARGET" \
+    "$(overlay_state_root "$overlay_name")" \
+    "$(overlay_state_root "$overlay_name")/runtime"
 }
 
 apply_module_migrations() {

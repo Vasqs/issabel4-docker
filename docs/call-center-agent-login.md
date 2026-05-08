@@ -141,7 +141,8 @@ The validated one-click `Logar` flow now has an explicit contract across bridge,
 gateway, and browser:
 
 - the bridge persists a pending login window and reports `status=logging` while
-  ECCP and call-center runtime state are still converging
+  ECCP and call-center runtime state are still converging, without blocking the
+  login HTTP response on channel polling
 - the painel-side gateway marks the first technical post-register call used for
   campaign activation as `bootstrap_login_call`
 - the browser auto-answers only that marked bootstrap call locally, instead of
@@ -192,6 +193,9 @@ Covered checks:
 - Re-run `python3 -m unittest tests.test_agent_console_login`
 - If the runtime was already in a bad state, the hook restarts `issabeldialer`
   so queue membership and agent mappings are reloaded
+- `callcenter_bridge` login confirmation is eventual. When validating a slow
+  login, trust `queue_log` plus bridge `status` before treating an immediate
+  `logging` response as a failure.
 - For production SIP or Janus, run the stack with
   `ISSABEL_COMPOSE_MODE=hostnet`; keep `bridge` only for local lab workflows
 - For containerized Issabel plus Tailscale peers, do not force

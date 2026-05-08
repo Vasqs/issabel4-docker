@@ -1,0 +1,79 @@
+{
+  "realm": "newivr",
+  "enabled": true,
+  "displayName": "NewIvr Homologacao",
+  "roles": {
+    "realm": [
+      {
+        "name": "newivr-admin",
+        "description": "Administrador do NewIvr"
+      },
+      {
+        "name": "newivr-agente",
+        "description": "Agente do NewIvr"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "newivr",
+      "name": "NewIvr",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "newivr-hml-secret",
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "https://127.0.0.1:8443/NewIvr/keycloak_callback.php",
+        "https://localhost:8443/NewIvr/keycloak_callback.php"
+      ],
+      "webOrigins": [
+        "https://127.0.0.1:8443",
+        "https://localhost:8443"
+      ],
+      "attributes": {
+        "post.logout.redirect.uris": "https://127.0.0.1:8443/NewIvr/login.php##https://localhost:8443/NewIvr/login.php"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "NewIvr",
+      "lastName": "Admin",
+      "email": "admin@newivr.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Admin123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "newivr-admin"
+      ]
+    },
+    {
+      "username": "agente",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "NewIvr",
+      "lastName": "Agente",
+      "email": "agente@newivr.local",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Agente123!",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "newivr-agente"
+      ]
+    }
+  ]
+}
