@@ -115,6 +115,7 @@ start_keycloak() {
 
   kc_dir="$(keycloak_dir)"
   export JAVA_HOME="$JRE_DIR"
+  export JAVA="${JRE_DIR}/bin/java"
   export PATH="${JRE_DIR}/bin:${PATH}"
   export KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN_USER"
   export KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD"
