@@ -99,9 +99,12 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertEqual(service["ports"][3]["published"], "5060")
         self.assertEqual(service["ports"][3]["target"], 5060)
         self.assertEqual(service["ports"][3]["protocol"], "udp")
-        self.assertEqual(service["ports"][4]["published"], "10000")
-        self.assertEqual(service["ports"][4]["target"], 10000)
-        self.assertEqual(service["ports"][4]["protocol"], "udp")
+        self.assertEqual(service["ports"][4]["published"], "5060")
+        self.assertEqual(service["ports"][4]["target"], 5060)
+        self.assertEqual(service["ports"][4]["protocol"], "tcp")
+        self.assertEqual(service["ports"][5]["published"], "10000")
+        self.assertEqual(service["ports"][5]["target"], 10000)
+        self.assertEqual(service["ports"][5]["protocol"], "udp")
         self.assertEqual(service["ports"][-1]["published"], "10100")
         self.assertEqual(service["ports"][-1]["target"], 10100)
         self.assertEqual(service["ports"][-1]["protocol"], "udp")
@@ -165,6 +168,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
         helper_wrapper = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "bin" / "issabel-helper"
         bootstrap_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "bootstrap-issabel"
         firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
+        newivr_keycloak_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "newivr-keycloak"
         post_restore_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "apply-issabelbr-post-restore"
         install_profile_example = ROOT / ".issabel-install.conf.example"
         env_file = ROOT / ".env"
@@ -188,6 +192,7 @@ class IssabelStackLayoutTests(unittest.TestCase):
             helper_wrapper,
             bootstrap_script,
             firstboot_script,
+            newivr_keycloak_script,
             post_restore_script,
             install_profile_example,
             env_file,
@@ -290,6 +295,8 @@ class IssabelStackLayoutTests(unittest.TestCase):
         self.assertIn("verify_overlay_conflicts", rootfs_sync_text)
         self.assertIn("apply_overlay", rootfs_sync_text)
         self.assertIn("restore_overlay", rootfs_sync_text)
+        newivr_keycloak_text = newivr_keycloak_script.read_text()
+        self.assertIn('export JAVA="${JRE_DIR}/bin/java"', newivr_keycloak_text)
         self.assertIn("OVERLAYS_SOURCE_ROOT", rootfs_sync_text)
         self.assertIn("rsync", sync_text)
 
