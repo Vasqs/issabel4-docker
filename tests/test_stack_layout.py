@@ -139,12 +139,14 @@ class IssabelStackLayoutTests(unittest.TestCase):
             "issabel-agenda issabel-callcenter issabel-endpointconfig2 issabel-extras issabel-fax issabel-reports",
         )
         self.assertEqual(service["environment"]["ISSABEL_SIP_PORT"], "5060")
+        self.assertEqual(service["environment"]["ISSABEL_HTTP_PORT"], "80")
         self.assertEqual(service["environment"]["NEWIVR_KEYCLOAK_HTTP_BIND_HOST"], "127.0.0.1")
         self.assertEqual(service["environment"]["NEWIVR_KEYCLOAK_HTTP_PORT"], "18080")
         self.assertEqual(service["environment"]["ISSABEL_HTTPS_PORT"], "8443")
         self.assertEqual(service["environment"]["ISSABEL_RTP_START"], "10000")
         self.assertEqual(service["environment"]["ISSABEL_RTP_END"], "10100")
         self.assertIn("network_mode: host", compose_text)
+        self.assertIn("ISSABEL_HTTP_PORT: ${ISSABEL_HTTP_PORT:-80}", compose_text)
         self.assertIn("ISSABEL_HTTPS_PORT: ${ISSABEL_HTTPS_PORT:-443}", compose_text)
         self.assertNotIn("ports:", compose_text)
         self.assertEqual(service["tmpfs"], ["/run", "/run/lock", "/tmp"])
@@ -465,6 +467,8 @@ class IssabelStackLayoutTests(unittest.TestCase):
 
         self.assertIn('if [[ "${COMPOSE_DESCRIPTION}" == "hostnet" && -z "${ISSABEL_HTTPS_PORT+x}" ]]; then', helper_text)
         self.assertIn('export ISSABEL_HTTPS_PORT="${ISSABEL_HOSTNET_HTTPS_PORT:-443}"', helper_text)
+        self.assertIn('if [[ "${COMPOSE_DESCRIPTION}" == "hostnet" && -z "${ISSABEL_HTTP_PORT+x}" ]]; then', helper_text)
+        self.assertIn('export ISSABEL_HTTP_PORT="${ISSABEL_HOSTNET_HTTP_PORT:-80}"', helper_text)
 
     def test_firstboot_seeds_callcenter_and_pbx_database_contract(self) -> None:
         firstboot_script = ROOT / "docker" / "issabel" / "rootfs" / "usr" / "local" / "bin" / "issabel-firstboot"
